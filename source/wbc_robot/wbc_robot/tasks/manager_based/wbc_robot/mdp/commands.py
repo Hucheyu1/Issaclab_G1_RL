@@ -74,7 +74,10 @@ class MotionCommand(CommandTerm):
 
     def __init__(self, cfg: MotionCommandCfg, env: ManagerBasedRLEnv):
         super().__init__(cfg, env)
-
+        # self.robot: 这是物理引擎中 G1 机器人的实体句柄（Articulation）。你可以通过它向物理引擎发送关节力矩，或者读取当前的真实物理状态。
+        # self.robot_anchor_body_index: 真实机器人的“锚点（通常是骨盆 Base）”在机器人身体部件列表中的编号。
+        # self.motion_anchor_body_index: 数据集（影子人类）中的“锚点”在数据集骨骼列表中的编号。这两个索引的作用是让真实机器人和虚拟数据集在空间中有一个对齐的基准点。
+        # self.body_indexes: 一个张量，保存了所有需要追踪的肢体连杆（比如手腕、脚踝）在物理引擎中的具体编号。
         self.robot: Articulation = env.scene[cfg.asset_name]
         self.robot_anchor_body_index = self.robot.body_names.index(self.cfg.anchor_body_name)
         self.motion_anchor_body_index = self.cfg.body_names.index(self.cfg.anchor_body_name)
@@ -108,6 +111,10 @@ class MotionCommand(CommandTerm):
         self.metrics["sampling_top1_prob"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["sampling_top1_bin"] = torch.zeros(self.num_envs, device=self.device)
 
+    # 代码中间那一大串 @property 装饰器修饰的方法，是在构建两套状态数据：
+    # Target (Motion/目标态)：比如 joint_pos, anchor_pos_w。它通过 self.motion（即 MotionLoader）和当前的时间步 self.time_steps，实时查表获取数据集中“影子人类”在这一帧应该处于什么姿态和速度。
+    # Actual (Robot/现实态)：比如 robot_joint_pos, robot_anchor_pos_w。它直接从 Isaac Lab 物理引擎 (self.robot.data) 中读取 G1 机器人当前的真实物理状态。
+    # 有了这两组数据，_update_metrics 就可以轻松算出两者之间的差值（Error），这正好为你前面定义的 9 项 Rewards 提供了最原始的误差来源。
     @property
     def command(self) -> torch.Tensor:  # TODO Consider again if this is the best observation
         return torch.cat([self.joint_pos, self.joint_vel], dim=1)
@@ -250,6 +257,8 @@ class MotionCommand(CommandTerm):
         self.metrics["sampling_top1_prob"][:] = pmax
         self.metrics["sampling_top1_bin"][:] = imax.float() / self.bin_count
 
+    # 状态重置与域随机化：当环境需要重置时（比如机器人摔倒了），这个函数会被调用。它会根据自适应采样策略重新选取一个新的时间步（即动作序列中的新起点），
+    # 并且在这个基础上注入一些随机噪声（比如位置、速度、关节角度的微小扰动），以增强机器人的鲁棒性和泛化能力。最后它会把新的目标状态写入物理引擎，让机器人从新的参考位姿开始练习。
     def _resample_command(self, env_ids: Sequence[int]):
         if len(env_ids) == 0:
             return
@@ -362,29 +371,32 @@ class MotionCommand(CommandTerm):
 class MotionCommandCfg(CommandTermCfg):
     """单动作(Motion)指令配置。"""
 
-    class_type: type = MotionCommand
+    class_type: type = MotionCommand  # 控制类实现，此处为 MotionCommand
 
-    asset_name: str = MISSING
+    asset_name: str = MISSING  # 仿真场景中目标机器人资产的名称
 
-    motion_file: str = MISSING
-    anchor_body_name: str = MISSING
-    body_names: list[str] = MISSING
+    motion_file: str = MISSING  # 要加载的单动作数据文件(.npz)路径
+    anchor_body_name: str = MISSING  # 锚点刚体（如根节点/骨盆）名称，用于对齐整体位姿
+    body_names: list[str] = MISSING  # 需要追踪其运动轨迹的目标部位刚体列表
 
-    pose_range: dict[str, tuple[float, float]] = {}
-    velocity_range: dict[str, tuple[float, float]] = {}
+    # 机器人重置（Resample）时注入的初始随机噪声区间，用于增强鲁棒性
+    pose_range: dict[str, tuple[float, float]] = {}  # 根节点的六自由度位姿(x, y, z, roll, pitch, yaw)噪声区间
+    velocity_range: dict[str, tuple[float, float]] = {}  # 根节点线速度和角速度诸注入的噪声区间
 
-    joint_position_range: tuple[float, float] = (-0.52, 0.52)
+    joint_position_range: tuple[float, float] = (-0.52, 0.52)  # 给各个关节位置注入的随机噪声范围
 
-    adaptive_kernel_size: int = 1
-    adaptive_lambda: float = 0.8
-    adaptive_uniform_ratio: float = 0.1
-    adaptive_alpha: float = 0.001
+    # 自适应时间片段采样（Adaptive Sampling）参数设置：重点练机器人容易摔倒的阶段
+    adaptive_kernel_size: int = 1  # 失败概率计算时的平滑卷积核大小（辐射到摔倒帧附近）
+    adaptive_lambda: float = 0.8  # 卷积核指数衰减系数，离摔倒帧越远增加的权重越小
+    adaptive_uniform_ratio: float = 0.1  # 混合的均匀随机采样比例兜底，防止完全陷入某一段
+    adaptive_alpha: float = 0.001  # 历史失败记录EMA衰减权重，控制遗忘速率
 
+    # 可视化及调试（Debug Viz）配置
     anchor_visualizer_cfg: VisualizationMarkersCfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/Command/pose")
-    anchor_visualizer_cfg.markers["frame"].scale = (0.2, 0.2, 0.2)
+    anchor_visualizer_cfg.markers["frame"].scale = (0.2, 0.2, 0.2)  # 锚点当前目标参考位姿的可视化大小
 
     body_visualizer_cfg: VisualizationMarkersCfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/Command/pose")
-    body_visualizer_cfg.markers["frame"].scale = (0.1, 0.1, 0.1)
+    body_visualizer_cfg.markers["frame"].scale = (0.1, 0.1, 0.1)  # 身体其他部位目标参考位姿的可视化大小
 
 
 class MultiMotionCommand(CommandTerm):
@@ -838,79 +850,79 @@ class MultiMotionCommand(CommandTerm):
 
 @configclass
 class MultiMotionCommandCfg(CommandTermCfg):
-    """Configuration for multi-motion command with global bins sampling."""
+    """基于全局时间窗(global bins)采样策略的多动作指令配置。"""
 
     class_type: type = MultiMotionCommand
 
     asset_name: str = MISSING
-    """Name of the robot asset in the scene."""
+    """场景中目标机器人资产的名称。"""
 
-    # Dataset configuration
+    # 数据集配置
     dataset_dirs: list[str] = MISSING
-    """List of dataset directories containing NPZ motion files."""
+    """包含 NPZ 动作文件的数据集目录列表。"""
 
     robot_name: str = MISSING
-    """Robot name for dataset filtering."""
+    """用于数据集过滤的机器人名称。"""
 
     splits: list[str | list[str]] = MISSING
-    """Dataset splits configuration. Flexible format supporting:
-    - Single split per dataset: ["train", "val", "test"]
-    - Combined splits per dataset: [["train", "walk_subset"], "test"]
-    - Mixed format: ["train", ["train", "walk_subset"], "test"]
+    """数据集分割(splits)配置。支持灵活的格式：
+    - 每个数据集单一切分：["train", "val", "test"]
+    - 每个数据集合并切分：[["train", "walk_subset"], "test"]
+    - 混合格式：["train", ["train", "walk_subset"], "test"]
 
-    Examples:
-        splits=["train", "val"]  # Use "train" for dataset_dirs[0], "val" for dataset_dirs[1]
-        splits=[["train", "walk"], "test"]  # Combine "train"+"walk" for dataset_dirs[0], "test" for dataset_dirs[1]
+    示例：
+        splits=["train", "val"]  # 对 dataset_dirs[0] 使用 "train"，对 dataset_dirs[1] 使用 "val"
+        splits=[["train", "walk"], "test"]  # 对 dataset_dirs[0] 结合使用 "train"+"walk"，对 dataset_dirs[1] 使用 "test"
     """
 
-    # Distributed training configuration
+    # 分布式训练配置
     distributed_world_size: int = 1
-    """Total number of distributed processes."""
+    """分布式进程的总数 (World Size)。"""
 
     distributed_rank: int = 0
-    """Current process rank in distributed training."""
+    """当前进程在分布式训练中的序号 (Rank)。"""
 
     distributed_data_split: bool = False
-    """Whether to enable distributed data sharding across ranks."""
+    """是否启用跨秩(ranks)的分布式数据分片。"""
 
-    # Body configuration
+    # 刚体配置
     anchor_body_name: str = MISSING
-    """Name of the anchor body (usually root or pelvis)."""
+    """锚点刚体的名称（通常是根节点 root 或骨盆 pelvis）。"""
 
     body_names: list[str] = MISSING
-    """List of body names to track."""
+    """需要追踪其运动轨迹的目标部位刚体列表。"""
 
-    # Initialization noise ranges
+    # 初始化噪声范围
     pose_range: dict[str, tuple[float, float]] = {}
-    """Pose noise ranges for x, y, z, roll, pitch, yaw."""
+    """给根节点位姿 (x, y, z, roll, pitch, yaw) 注入的噪声范围。"""
 
     velocity_range: dict[str, tuple[float, float]] = {}
-    """Velocity noise ranges for x, y, z, roll, pitch, yaw."""
+    """给根节点速度 (x, y, z, roll, pitch, yaw) 注入的噪声范围。"""
 
     joint_position_range: tuple[float, float] = (-0.52, 0.52)
-    """Joint position noise range."""
+    """关节位置的噪声范围。"""
 
-    # Adaptive sampling parameters
+    # 自适应采样参数
     adaptive_kernel_size: int = 1
-    """Kernel size for convolution smoothing of bin probabilities."""
+    """用于时间片段(bin)概率卷积平滑的核大小。"""
 
     adaptive_lambda: float = 0.8
-    """Exponential decay factor for kernel weights."""
+    """核权重的指数衰减系数。"""
 
     adaptive_uniform_ratio: float = 0.9
-    """Ratio of uniform sampling mixed with failure-based sampling."""
+    """均匀采样与基于失败（自适应）采样的混合比例（均匀采样的占比兜底）。"""
 
     adaptive_cap: int = 2
-    """Cap for bin failure counts to prevent extreme probabilities."""
+    """时间片段(bin)失败次数的上限，防止产生极端（过大）的概率分布。"""
 
     adaptive_alpha: float = 0.001
-    """EMA smoothing factor for bin failure counts."""
+    """时间片段(bin)失败次数的指数移动平均(EMA)平滑衰减系数。"""
 
-    # Evaluation-specific parameters
+    # 评估专用参数
     eval_target_attempts: int = 128
-    """Number of evaluation attempts per motion (used by EvalMultiMotionCommand)."""
+    """每个动作的评估尝试次数（由 EvalMultiMotionCommand 使用）。"""
 
-    # Visualization
+    # 可视化调试
     anchor_visualizer_cfg: VisualizationMarkersCfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/Command/pose")
     anchor_visualizer_cfg.markers["frame"].scale = (0.2, 0.2, 0.2)
 
@@ -919,46 +931,45 @@ class MultiMotionCommandCfg(CommandTermCfg):
 
 
 class GAEMimic_MultiMotionCommand(MultiMotionCommand):
-    """GAEMimic-specific multi-motion command supporting SMPL-X data access.
+    """支持 SMPL-X 数据访问的 GAEMimic 专用多动作指令。
 
-    Extends MultiMotionCommand to use Unify_Motion_Dataset and Unify_Motion_Dataloader,
-    enabling access to both robot and SMPL-X motion data for multi-modal motion tracking.
+    扩展了 MultiMotionCommand 以使用 Unify_Motion_Dataset 和 Unify_Motion_Dataloader，
+    从而允许访问机器人和 SMPL-X 的运动数据，用于多模态运动追踪。
 
-    Key differences from MultiMotionCommand:
-    - Uses Unify_Motion_Dataset instead of Motion_Dataset for paired data loading
-    - Uses Unify_Motion_Dataloader instead of Motion_Dataloader with dual-source buffers
-    - Provides smplx_pose_body property for accessing SMPL-X pose data
+    与 MultiMotionCommand 的主要区别：
+    - 使用 Unify_Motion_Dataset 代替 Motion_Dataset 进行配堆数据加载
+    - 使用 Unify_Motion_Dataloader 及其双源缓冲区代替 Motion_Dataloader
+    - 提供 smplx_pose_body 属性以访问 SMPL-X 姿态数据
     """
 
     cfg: GAEMimic_MultiMotionCommandCfg
 
     def __init__(self, cfg: GAEMimic_MultiMotionCommandCfg, env: ManagerBasedRLEnv):
-        """Initialize GAEMimic command with unified dataset support.
+        """初始化带有统一数据集支持的 GAEMimic 指令。
 
-        Args:
-            cfg: GAEMimic_MultiMotionCommandCfg configuration
-            env: ManagerBasedRLEnv environment
+        参数:
+            cfg: GAEMimic_MultiMotionCommandCfg 配置
+            env: ManagerBasedRLEnv 环境
         """
-        # Call parent initialization first to set up robot and environment properties
+        # 首先调用父类初始化以设置机器人和环境属性
         super().__init__(cfg, env)
 
     def _init_datasets(self):
-        """Initialize unified dataset and dataloader for SMPL-X support.
+        """初始化用于支持 SMPL-X 的统一数据集和数据加载器。
 
-        Uses Unify_Motion_Dataset which extends Motion_Dataset to load
-        extended NPZ files (already processed by extend_datasets.py) containing
-        SMPL-X pose body data along with standard robot motion data.
+        使用继承自 Motion_Dataset 的 Unify_Motion_Dataset 来加载扩展的 NPZ 文件
+        （已经过 extend_datasets.py 处理），这些文件包含 SMPL-X 身体姿态数据以及标准机器人运动数据。
         """
         print(f"[GAEMimic_MultiMotionCommand] Loading unified dataset from: {self.cfg.dataset_dirs}")
 
-        # Create unified dataset with extended keys (SMPL-X data)
+        # 使用扩展键 (SMPL-X 数据) 创建统一数据集
         self.dataset = Unify_Motion_Dataset(
             dataset_dirs=self.cfg.dataset_dirs,
             robot_name=self.cfg.robot_name,
             splits=self.cfg.splits,
         )
 
-        # Create unified dataloader with extended motion buffer
+        # 使用扩展的运动缓冲区创建统一的数据加载器
         self.dataloader = Unify_Motion_Dataloader(
             dataset=self.dataset,
             body_indexes=self.body_indexes,
@@ -981,20 +992,20 @@ class GAEMimic_MultiMotionCommand(MultiMotionCommand):
         return self.dataloader.motion_buffer.robot_keypoints_rot[self.global_time_steps]
 
     def motion_robot_joint_pos_vel(self, interval: int, frames: int):
-        # [num_envs, 1] -> [num_envs, frames] via broadcasting with offsets
+        # 通过采用偏移量广播: [num_envs, 1] -> [num_envs, frames]
         offsets = interval * torch.arange(
             frames, dtype=self.global_time_steps.dtype, device=self.global_time_steps.device
         )
         self.future_global_time_steps = self.global_time_steps.unsqueeze(-1) + offsets
 
-        # Clamp to max valid global timestep for each motion
-        # Each environment may be at a different motion, so we need per-motion clamping
+        # 将全局时间步限制在每个动作的最大有效范围内
+        # 每个环境可能处于不同的动作状态，因此我们需要在每个动作的基础上进行截断
         motion_end_steps = (
             self.dataloader.motion_offsets[self.motion_ids] + self.dataloader.motion_lengths[self.motion_ids] - 1
         )
         self.future_global_time_steps = torch.clamp(self.future_global_time_steps, max=motion_end_steps.unsqueeze(-1))
 
-        # Index into motion_buffer using global timesteps (abstracted away motion_id/time_steps)
+        # 使用全局时间步作为索引对 motion_buffer 存取数据 (抽象出了 motion_id/time_steps)
         return torch.cat(
             [
                 self.dataloader.motion_buffer.joint_pos[self.future_global_time_steps],
@@ -1004,14 +1015,14 @@ class GAEMimic_MultiMotionCommand(MultiMotionCommand):
         )
 
     def motion_robot_joint_pos(self, interval: int, frames: int):
-        # [num_envs, 1] -> [num_envs, frames] via broadcasting with offsets
+        # 通过采用偏移量广播: [num_envs, 1] -> [num_envs, frames]
         offsets = interval * torch.arange(
             frames, dtype=self.global_time_steps.dtype, device=self.global_time_steps.device
         )
         self.future_global_time_steps = self.global_time_steps.unsqueeze(-1) + offsets
 
-        # Clamp to max valid global timestep for each motion
-        # Each environment may be at a different motion, so we need per-motion clamping
+        # 将全局时间步限制在每个动作的最大有效范围内
+        # 每个环境可能处于不同的动作状态，因此我们需要在每个动作的基础上进行截断
         motion_end_steps = (
             self.dataloader.motion_offsets[self.motion_ids] + self.dataloader.motion_lengths[self.motion_ids] - 1
         )
@@ -1020,71 +1031,71 @@ class GAEMimic_MultiMotionCommand(MultiMotionCommand):
         return self.dataloader.motion_buffer.joint_pos[self.future_global_time_steps]
 
     def motion_smplx_pose_body(self, interval: int, frames: int):
-        # [num_envs, 1] -> [num_envs, frames] via broadcasting with offsets
+        # 通过采用偏移量广播: [num_envs, 1] -> [num_envs, frames]
         offsets = interval * torch.arange(
             frames, dtype=self.global_time_steps.dtype, device=self.global_time_steps.device
         )
         self.future_global_time_steps = self.global_time_steps.unsqueeze(-1) + offsets
 
-        # Clamp to max valid global timestep for each motion
-        # Each environment may be at a different motion, so we need per-motion clamping
+        # 将全局时间步限制在每个动作的最大有效范围内
+        # 每个环境可能处于不同的动作状态，因此我们需要在每个动作的基础上进行截断
         motion_end_steps = (
             self.dataloader.motion_offsets[self.motion_ids] + self.dataloader.motion_lengths[self.motion_ids] - 1
         )
         self.future_global_time_steps = torch.clamp(self.future_global_time_steps, max=motion_end_steps.unsqueeze(-1))
 
-        # Index into motion_buffer using global timesteps (abstracted away motion_id/time_steps)
+        # 使用全局时间步作为索引对 motion_buffer 存取数据 (抽象出了 motion_id/time_steps)
         return self.dataloader.motion_buffer.smplx_pose_body[self.future_global_time_steps]
 
     def motion_keypoints_trans(self, interval: int, frames: int):
-        # [num_envs, 1] -> [num_envs, frames] via broadcasting with offsets
+        # 通过采用偏移量广播: [num_envs, 1] -> [num_envs, frames]
         offsets = interval * torch.arange(
             frames, dtype=self.global_time_steps.dtype, device=self.global_time_steps.device
         )
         self.future_global_time_steps = self.global_time_steps.unsqueeze(-1) + offsets
 
-        # Clamp to max valid global timestep for each motion
-        # Each environment may be at a different motion, so we need per-motion clamping
+        # 将全局时间步限制在每个动作的最大有效范围内
+        # 每个环境可能处于不同的动作状态，因此我们需要在每个动作的基础上进行截断
         motion_end_steps = (
             self.dataloader.motion_offsets[self.motion_ids] + self.dataloader.motion_lengths[self.motion_ids] - 1
         )
         self.future_global_time_steps = torch.clamp(self.future_global_time_steps, max=motion_end_steps.unsqueeze(-1))
 
-        # Index into motion_buffer using global timesteps (abstracted away motion_id/time_steps)
+        # 使用全局时间步作为索引对 motion_buffer 存取数据 (抽象出了 motion_id/time_steps)
         return self.dataloader.motion_buffer.robot_keypoints_trans[self.future_global_time_steps]
 
     def motion_keypoints_rot(self, interval: int, frames: int):
-        # [num_envs, 1] -> [num_envs, frames] via broadcasting with offsets
+        # 通过采用偏移量广播: [num_envs, 1] -> [num_envs, frames]
         offsets = interval * torch.arange(
             frames, dtype=self.global_time_steps.dtype, device=self.global_time_steps.device
         )
         self.future_global_time_steps = self.global_time_steps.unsqueeze(-1) + offsets
 
-        # Clamp to max valid global timestep for each motion
-        # Each environment may be at a different motion, so we need per-motion clamping
+        # 将全局时间步限制在每个动作的最大有效范围内
+        # 每个环境可能处于不同的动作状态，因此我们需要在每个动作的基础上进行截断
         motion_end_steps = (
             self.dataloader.motion_offsets[self.motion_ids] + self.dataloader.motion_lengths[self.motion_ids] - 1
         )
         self.future_global_time_steps = torch.clamp(self.future_global_time_steps, max=motion_end_steps.unsqueeze(-1))
 
-        # Index into motion_buffer using global timesteps (abstracted away motion_id/time_steps)
+        # 使用全局时间步作为索引对 motion_buffer 存取数据 (抽象出了 motion_id/time_steps)
         return self.dataloader.motion_buffer.robot_keypoints_rot[self.future_global_time_steps]
 
     def motion_keypoints_se3(self, interval: int, frames: int):
-        # [num_envs, 1] -> [num_envs, frames] via broadcasting with offsets
+        # 通过采用偏移量广播: [num_envs, 1] -> [num_envs, frames]
         offsets = interval * torch.arange(
             frames, dtype=self.global_time_steps.dtype, device=self.global_time_steps.device
         )
         self.future_global_time_steps = self.global_time_steps.unsqueeze(-1) + offsets
 
-        # Clamp to max valid global timestep for each motion
-        # Each environment may be at a different motion, so we need per-motion clamping
+        # 将全局时间步限制在每个动作的最大有效范围内
+        # 每个环境可能处于不同的动作状态，因此我们需要在每个动作的基础上进行截断
         motion_end_steps = (
             self.dataloader.motion_offsets[self.motion_ids] + self.dataloader.motion_lengths[self.motion_ids] - 1
         )
         self.future_global_time_steps = torch.clamp(self.future_global_time_steps, max=motion_end_steps.unsqueeze(-1))
 
-        # Index into motion_buffer using global timesteps (abstracted away motion_id/time_steps)
+        # 使用全局时间步作为索引对 motion_buffer 存取数据 (抽象出了 motion_id/time_steps)
         keypoints = torch.cat(
             [
                 self.dataloader.motion_buffer.robot_keypoints_trans[self.future_global_time_steps],
@@ -1097,6 +1108,6 @@ class GAEMimic_MultiMotionCommand(MultiMotionCommand):
 
 @configclass
 class GAEMimic_MultiMotionCommandCfg(MultiMotionCommandCfg):
-    """Configuration for GAEMimic multi-motion command with SMPL-X support."""
+    """支持 SMPL-X 数据的 GAEMimic 多动作指令配置。"""
 
     class_type: type = GAEMimic_MultiMotionCommand

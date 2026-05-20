@@ -13,28 +13,33 @@ if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
 
+# 辅助函数：根据提供的关节名称列表，获取它们在追踪网络(Command)中的索引号
 def _get_body_indexes(command: MotionCommand, body_names: list[str] | None) -> list[int]:
     return [i for i, name in enumerate(command.cfg.body_names) if (body_names is None) or (name in body_names)]
 
 
+# 计算全局锚点（通常为根节点骨盆）位置误差的指数奖励
 def motion_global_anchor_position_error_exp(env: ManagerBasedRLEnv, command_name: str, std: float) -> torch.Tensor:
     command: MotionCommand = env.command_manager.get_term(command_name)
     error = torch.sum(torch.square(command.anchor_pos_w - command.robot_anchor_pos_w), dim=-1)
     return torch.exp(-error / std**2)
 
 
+# 计算全局锚点姿态/朝向（四元数）误差的指数奖励
 def motion_global_anchor_orientation_error_exp(env: ManagerBasedRLEnv, command_name: str, std: float) -> torch.Tensor:
     command: MotionCommand = env.command_manager.get_term(command_name)
     error = quat_error_magnitude(command.anchor_quat_w, command.robot_anchor_quat_w) ** 2
     return torch.exp(-error / std**2)
 
 
+# 计算全局锚点线速度（XYZ轴移动速度）误差的指数奖励
 def motion_global_anchor_velocity_error_exp(env: ManagerBasedRLEnv, command_name: str, std: float) -> torch.Tensor:
     command: MotionCommand = env.command_manager.get_term(command_name)
     error = torch.sum(torch.square(command.anchor_lin_vel_w - command.robot_anchor_lin_vel_w), dim=-1)
     return torch.exp(-error / std**2)
 
 
+# 计算全局锚点角速度（旋转速度）误差的指数奖励
 def motion_global_anchor_angular_velocity_error_exp(
     env: ManagerBasedRLEnv, command_name: str, std: float
 ) -> torch.Tensor:
@@ -43,6 +48,7 @@ def motion_global_anchor_angular_velocity_error_exp(
     return torch.exp(-error / std**2)
 
 
+# 计算被追踪骨骼连杆（Body）相对锚点的局部位置(Position)误差均值的指数奖励
 def motion_relative_body_position_error_exp(
     env: ManagerBasedRLEnv, command_name: str, std: float, body_names: list[str] | None = None
 ) -> torch.Tensor:
@@ -54,6 +60,7 @@ def motion_relative_body_position_error_exp(
     return torch.exp(-error.mean(-1) / std**2)
 
 
+# 计算被追踪骨骼连杆（Body）相对锚点的局部朝向(Orientation/Quat)误差均值的指数奖励
 def motion_relative_body_orientation_error_exp(
     env: ManagerBasedRLEnv, command_name: str, std: float, body_names: list[str] | None = None
 ) -> torch.Tensor:
@@ -66,6 +73,7 @@ def motion_relative_body_orientation_error_exp(
     return torch.exp(-error.mean(-1) / std**2)
 
 
+# 计算各个身体连杆在世界坐标系下线速度误差的平均指数奖励
 def motion_global_body_linear_velocity_error_exp(
     env: ManagerBasedRLEnv, command_name: str, std: float, body_names: list[str] | None = None
 ) -> torch.Tensor:
@@ -77,6 +85,7 @@ def motion_global_body_linear_velocity_error_exp(
     return torch.exp(-error.mean(-1) / std**2)
 
 
+# 计算各个身体连杆在世界坐标系下角速度误差的平均指数奖励
 def motion_global_body_angular_velocity_error_exp(
     env: ManagerBasedRLEnv, command_name: str, std: float, body_names: list[str] | None = None
 ) -> torch.Tensor:
@@ -88,6 +97,7 @@ def motion_global_body_angular_velocity_error_exp(
     return torch.exp(-error.mean(-1) / std**2)
 
 
+# 足底接触时间判定：利用接触传感器，衡量脚底腾空(First air)与触地时长，给予合理的物理步态激励
 def feet_contact_time(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, threshold: float) -> torch.Tensor:
     contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
     first_air = contact_sensor.compute_first_air(env.step_dt, env.physics_dt)[:, sensor_cfg.body_ids]

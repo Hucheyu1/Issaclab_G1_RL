@@ -1,7 +1,7 @@
-"""Motion dataset and dataloader for loading motion data from NPZ files.
+"""用于从 NPZ 文件加载动作数据的动作数据集和数据加载器(Dataloader)。
 
-This module provides PyTorch-based Dataset and DataLoader for loading motion data
-from NPZ files with support for quantity-based sampling and train/val split.
+该模块提供了基于 PyTorch 的 Dataset 和 DataLoader，用于从 NPZ 文件中
+加载动作数据，并支持基于质量的分层采样以及训练/验证集切分。
 """
 
 from pathlib import Path
@@ -14,37 +14,37 @@ from torch.utils.data import Dataset
 
 
 class Motion_Dataset(Dataset):
-    """PyTorch Dataset for loading motion data from NPZ files.
+    """用于从 NPZ 文件加载动作数据的 PyTorch 数据集。
 
-    This dataset loads motion data lazily (on-demand in __getitem__) to avoid
-    loading all motion data into memory at once, which could cause OOM issues.
+    该数据集采用延迟加载（在 __getitem__ 中按需加载），以避免
+    一次性将所有动作数据加载到内存中可能导致的 OOM（内存溢出）问题。
 
-    Args:
-        dataset_dirs: List of dataset directory paths. Each should follow the structure:
+    参数:
+        dataset_dirs: 数据集目录路径列表。每个目录及其后续应遵循以下结构:
             ./datasets/npz_datasets/{dataset_name}/{robot_name}/
-        robot_name: Name of the robot (e.g., "g1").
-        splits: List of dataset splits corresponding to each dataset_dir.
-            Must have the same length as dataset_dirs. Each element can be:
-            - A string: single split name (e.g., "train", "val", "walk_subset")
-            - A list of strings: multiple splits to combine (e.g., ["train", "walk_subset"])
+        robot_name: 机器人名称 (例如 "g1")。
+        splits: 与每个 dataset_dir 对应的数据集切分列表。
+            长度必须与 dataset_dirs 相同。每个元素可以是:
+            - 字符串: 单个切分名称 (例如 "train", "val", "walk_subset")
+            - 字符串列表: 需要合并的多个切分 (例如 ["train", "walk_subset"])
 
-    Example:
-        >>> # Single split per dataset
+    示例:
+        >>> # 每个数据集单个切分
         >>> dataset = Motion_Dataset(
         ...     dataset_dirs=["./datasets/npz_datasets/LAFAN1_Retargeting_Dataset"], robot_name="g1", splits=["train"]
         ... )
-        >>> # Multiple datasets with different splits
+        >>> # 多个数据集和不同切分
         >>> dataset = Motion_Dataset(
         ...     dataset_dirs=[
         ...         "./datasets/npz_datasets/LAFAN1_Retargeting_Dataset",
         ...         "./datasets/npz_datasets/LAFAN1_Retargeting_Dataset",
         ...     ],
         ...     robot_name="g1",
-        ...     splits=["train", ["train", "walk_subset"]],  # Second dataset combines two splits
+        ...     splits=["train", ["train", "walk_subset"]],  # 第二个数据集合并了两个切分
         ... )
-        >>> print(f"Dataset size: {len(dataset)}")
+        >>> print(f"数据集大小: {len(dataset)}")
         >>> sample = dataset[0]
-        >>> print(f"Motion shape: {sample['joint_pos'].shape}")
+        >>> print(f"动作形状: {sample['joint_pos'].shape}")
     """
 
     def __init__(
@@ -54,25 +54,25 @@ class Motion_Dataset(Dataset):
         splits: list[str | list[str]],
         shuffle_seed: int = 42,
     ):
-        """Initialize the Motion_Dataset.
+        """初始化 Motion_Dataset。
 
-        Args:
-            dataset_dirs: List of dataset directory paths.
-            robot_name: Robot name.
-            splits: List of dataset splits, must be the same length as dataset_dirs.
-                Each element corresponds to the dataset at the same index in dataset_dirs.
-                Can be a string (single split) or list of strings (multiple splits to combine).
+        参数:
+            dataset_dirs: 数据集目录路径列表。
+            robot_name: 机器人名称。
+            splits: 数据集切分列表，长度必须与 dataset_dirs 相同。
+                每个元素对应于 dataset_dirs 中同等索引的数据集。
+                可以是字符串（单个切分）或字符串列表（要合并的多个切分）。
 
-        Raises:
-            ValueError: If splits and dataset_dirs have different lengths.
-            FileNotFoundError: If dataset directory or info file (info.yaml/info.yml) doesn't exist.
+        引发:
+            ValueError: 如果 splits 和 dataset_dirs 长度不同。
+            FileNotFoundError: 如果数据集目录或信息文件（info.yaml/info.yml）不存在。
         """
         super().__init__()
 
-        # Validate that splits and dataset_dirs have the same length
+        # 检查 splits 和 dataset_dirs 长度是否一致
         if len(splits) != len(dataset_dirs):
             raise ValueError(
-                f"Length of splits ({len(splits)}) must match length of dataset_dirs ({len(dataset_dirs)})"
+                f"splits 的长度 ({len(splits)}) 必须匹配 dataset_dirs 的长度 ({len(dataset_dirs)})"
             )
 
         self.dataset_dirs = [Path(d).expanduser().resolve() for d in dataset_dirs]
@@ -80,31 +80,31 @@ class Motion_Dataset(Dataset):
         self.splits = splits
         self.shuffle_seed = shuffle_seed
 
-        # Storage for NPZ file paths and metadata
+        # 用于存储 NPZ 文件路径和元数据
         self.npz_paths: list[Path] = []
-        self.quantities: list[int] = []  # Quality/difficulty of each motion clip
-        self.motion_names: list[str] = []  # Base name of each motion
-        self.dataset_sources: list[str] = []  # Track which dataset each motion comes from
+        self.quantities: list[int] = []  # 每个动作片段的质量/难度评级
+        self.motion_names: list[str] = []  # 每个动作的基础名称
+        self.dataset_sources: list[str] = []  # 记录每个动作来自哪个数据集
 
-        # Load dataset information and collect NPZ paths
+        # 加载数据集信息并收集 NPZ 路径
         self._load_dataset_info()
         self._random_motions()
 
-        print(f"[Motion_Dataset] Loaded {len(self.npz_paths)} motion clips from {len(self.dataset_dirs)} dataset(s)")
-        print(f"[Motion_Dataset] Quantity distribution: {self._get_quantity_stats()}")
+        print(f"[Motion_Dataset] 从 {len(self.dataset_dirs)} 个数据集中加载了 {len(self.npz_paths)} 个动作片段")
+        print(f"[Motion_Dataset] 难度分布: {self._get_quantity_stats()}")
 
     def _load_dataset_info(self):
-        """Load dataset information from info.yaml or info.yml files and collect NPZ paths."""
+        """从 info.yaml 或 info.yml 文件加载数据集信息并收集 NPZ 路径。"""
         for dataset_idx, dataset_dir in enumerate(self.dataset_dirs):
             split_config = self.splits[dataset_idx]
 
-            # Normalize split_config to always be a list
+            # 规范化 split_config 使其始终为列表
             if isinstance(split_config, str):
                 split_names = [split_config]
             else:
                 split_names = split_config
 
-            # Try YAML files only (info.yaml or info.yml)
+            # 仅尝试 YAML 文件（info.yaml 或 info.yml）
             info_path = None
             for ext in [".yaml", ".yml"]:
                 candidate_path = dataset_dir / f"info{ext}"
@@ -114,29 +114,29 @@ class Motion_Dataset(Dataset):
 
             if info_path is None:
                 raise FileNotFoundError(
-                    f"Dataset info file not found in {dataset_dir}. Expected: info.yaml or info.yml"
+                    f"在 {dataset_dir} 中未找到数据集信息文件。期望文件名: info.yaml 或 info.yml"
                 )
 
-            # Load dataset info from YAML
+            # 从 YAML 加载数据集信息
             with open(info_path) as f:
                 info = yaml.safe_load(f)
 
             dataset_name = info["dataset"]
 
-            # Process each split in the configuration
+            # 处理配置中的每一个切分 (split)
             for split in split_names:
                 split_info = info.get(split, {})
 
                 if not split_info:
-                    raise ValueError(f"[Motion_Dataset] No '{split}' data in {dataset_name}")
+                    raise ValueError(f"[Motion_Dataset] {dataset_name} 中没有 '{split}' 数据")
 
-                # Construct path to robot-specific NPZ files
+                # 构建特定于机器人的 NPZ 文件夹路径
                 robot_dir = dataset_dir / self.robot_name
 
                 if not robot_dir.exists():
-                    raise FileNotFoundError(f"Robot directory not found: {robot_dir}")
+                    raise FileNotFoundError(f"未找到机器人目录: {robot_dir}")
 
-                # Collect NPZ paths for this split
+                # 收集当前切分的 NPZ 路径
                 for motion_name, quantity in split_info.items():
                     npz_path = robot_dir / f"{motion_name}.npz"
 
@@ -144,17 +144,17 @@ class Motion_Dataset(Dataset):
                         self.npz_paths.append(npz_path)
                         self.quantities.append(quantity)
                         self.motion_names.append(motion_name)
-                        # Record source as dataset:split1+split2+... for combined splits
+                        # 将来源记录为 dataset:split1+split2+... (针对合并切分的情况)
                         split_str = "+".join(split_names) if len(split_names) > 1 else split_names[0]
                         self.dataset_sources.append(f"{dataset_name}:{split_str}")
                     else:
-                        print(f"[Motion_Dataset] Warning: NPZ file not found: {npz_path}")
+                        print(f"[Motion_Dataset] 警告: 未找到 NPZ 文件: {npz_path}")
 
     def _random_motions(self):
         if self.shuffle_seed is not None:
-            # get the number of motions
+            # 获取动作数量
             num_motions = len(self.npz_paths)
-            # generate a random permutation of indices with fixed seed
+            # 使用固定随机数种子生成排列好的索引
             gen = torch.Generator().manual_seed(self.shuffle_seed)
             indices = torch.randperm(num_motions, generator=gen)
             self.shuffle_indices = indices.tolist()
@@ -162,10 +162,10 @@ class Motion_Dataset(Dataset):
             self.shuffle_indices = list(range(len(self.npz_paths)))
 
     def _get_quantity_stats(self) -> dict[int, int]:
-        """Get statistics of quantity distribution.
+        """获取难度分布统计信息。
 
-        Returns:
-            Dictionary mapping quantity to count.
+        返回:
+            将难度映射到数量的字典。
         """
         stats = {}
         for q in self.quantities:
@@ -173,44 +173,44 @@ class Motion_Dataset(Dataset):
         return stats
 
     def __len__(self) -> int:
-        """Return the number of motion clips in the dataset.
+        """返回数据集中的动作片段数。
 
-        Returns:
-            Number of motion clips.
+        返回:
+            动作片段数。
         """
         return len(self.npz_paths)
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
-        """Load and return a single motion clip.
+        """加载并返回单个动作片段。
 
-        This method loads the NPZ file on-demand to avoid memory issues.
+        此方法按需加载 NPZ 文件以避免内存问题。
 
-        Args:
-            idx: Index of the motion clip to load.
+        参数:
+            idx: 要加载的动作片段的索引。
 
-        Returns:
-            Dictionary containing:
-                - motion: Dictionary of numpy arrays with motion data:
-                    - joint_pos: (num_frames, num_joints) joint positions
-                    - joint_vel: (num_frames, num_joints) joint velocities
-                    - body_pos_w: (num_frames, num_bodies, 3) body positions
-                    - body_quat_w: (num_frames, num_bodies, 4) body quaternions
-                    - body_lin_vel_w: (num_frames, num_bodies, 3) body linear velocities
-                    - body_ang_vel_w: (num_frames, num_bodies, 3) body angular velocities
-                - fps: Frames per second of the motion data
-                - length: Number of frames in the motion
-                - duration: Duration in seconds
-                - npz_path: Path to the NPZ file
-                - motion_name: Name of the motion
-                - quantity: Quality/difficulty rating (1: best, 2: medium, 3: hard)
-                - dataset_source: Source dataset and split (format: "dataset_name:split")
+        返回:
+            包含以下内容的字典:
+                - motion: 包含动作数据的 numpy 数组字典:
+                    - joint_pos: (num_frames, num_joints) 关节位置
+                    - joint_vel: (num_frames, num_joints) 关节速度
+                    - body_pos_w: (num_frames, num_bodies, 3) 刚体位置
+                    - body_quat_w: (num_frames, num_bodies, 4) 刚体四元数
+                    - body_lin_vel_w: (num_frames, num_bodies, 3) 刚体线速度
+                    - body_ang_vel_w: (num_frames, num_bodies, 3) 刚体角速度
+                - fps: 动作数据的每秒帧数
+                - length: 动作的总帧数
+                - duration: 动作持续时间 (秒)
+                - npz_path: NPZ 文件路径
+                - motion_name: 动作名称
+                - quantity: 质量/难度评级 (1: 最好, 2: 中等, 3: 困难)
+                - dataset_source: 来源数据集和切分 (格式: "dataset_name:split")
         """
         npz_path = self.npz_paths[self.shuffle_indices[idx]]
 
-        # Load motion data
+        # 加载动作数据
         data = np.load(npz_path)
 
-        # Extract motion data
+        # 提取动作数据
         motion = {
             "joint_pos": data["joint_pos"],
             "joint_vel": data["joint_vel"],
@@ -220,7 +220,7 @@ class Motion_Dataset(Dataset):
             "body_ang_vel_w": data["body_ang_vel_w"],
         }
 
-        # Add contact data if available
+        # 如果可用，添加接触数据
         # if "contact" in data:
         # motion["contact"] = data["contact"]
 
@@ -240,14 +240,14 @@ class Motion_Dataset(Dataset):
         }
 
     def get_motion_info(self) -> list[dict[str, Any]]:
-        """Get information about all motions without loading the full data.
+        """获取所有动作的相关信息（不加载完整数据）。
 
-        Returns:
-            List of dictionaries containing motion metadata.
+        返回:
+            包含动作元数据的字典列表。
         """
         info_list = []
         for i in range(len(self)):
-            # Load only to get metadata (could be optimized to cache this)
+            # 仅预加载以获取元数据（可优化为缓存）
             data = np.load(self.npz_paths[i])
             fps = int(data["fps"][0])
             length = data["joint_pos"].shape[0]
@@ -268,10 +268,10 @@ class Motion_Dataset(Dataset):
         return info_list
 
     def get_statistics(self) -> dict[str, Any]:
-        """Get dataset statistics.
+        """获取数据集统计信息。
 
-        Returns:
-            Dictionary containing dataset statistics.
+        返回:
+            包含数据集统计信息的字典。
         """
         total_frames = 0
         total_duration = 0.0
@@ -300,15 +300,15 @@ class Motion_Dataset(Dataset):
 
 
 class Unify_Motion_Dataset(Motion_Dataset):
-    """Dataset that loads extended motion data with SMPL-X and keypoint information.
+    """加载包含 SMPL-X 和关键点等扩展信息动作的数据集。
 
-    Extends Motion_Dataset to access additional keys in NPZ files that have been
-    pre-processed by extend_datasets.py with SMPL-X data and robot keypoint SE3 data.
+    继承自 Motion_Dataset 以访问经 extend_datasets.py 处理后的 NPZ
+    文件中的拓展键值（如 SMPL-X 数据和机器人关键点 SE3 数据）。
 
-    Args:
-        dataset_dirs: List of dataset directory paths
-        robot_name: robot folder name
-        splits: List of dataset splits corresponding to each dataset_dir
+    参数:
+        dataset_dirs: 数据集目录路径列表
+        robot_name: 机器人文件夹名称
+        splits: 与每个 dataset_dir 对应的数据集切分列表
     """
 
     def __init__(
@@ -317,26 +317,26 @@ class Unify_Motion_Dataset(Motion_Dataset):
         robot_name: str,
         splits: list[str | list[str]],
     ) -> None:
-        # Simply call parent with same parameters
+        # 直接带着相同参数调用父类
         super().__init__(
             dataset_dirs=dataset_dirs,
             robot_name=robot_name,
             splits=splits,
         )
-        print(f"[Unify_Motion_Dataset] Extended motion dataset loaded with {len(self.npz_paths)} clips")
+        print(f"[Unify_Motion_Dataset] 成功加载扩展动作数据集，共有 {len(self.npz_paths)} 个片段")
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
-        """Load extended motion data from NPZ file.
+        """从 NPZ 文件加载扩展的动作数据。
 
-        Overrides parent to expose additional extended keys (smplx_pose_body,
-        robot_keypoints_trans, etc.) when available in the NPZ file.
+        重写了父类方法，当 NPZ 文件中存在额外的拓展键值
+        (smplx_pose_body, robot_keypoints_trans 等) 时将其暴露。
         """
         npz_path = self.npz_paths[idx]
 
-        # Load motion data
+        # 加载动作数据
         data = np.load(npz_path)
 
-        # Extract standard motion data (same as parent)
+        # 提取标准的动作数据 (与父类相同)
         motion = {
             "joint_pos": data["joint_pos"],
             "joint_vel": data["joint_vel"],
@@ -346,7 +346,7 @@ class Unify_Motion_Dataset(Motion_Dataset):
             "body_ang_vel_w": data["body_ang_vel_w"],
         }
 
-        # Add extended keys if available
+        # 若可用则添加拓展键
         extended_keys = [
             "smplx_pose_body",
             "smplx_pose_body_global_rot",
@@ -358,7 +358,7 @@ class Unify_Motion_Dataset(Motion_Dataset):
         for key in extended_keys:
             if key in data:
                 arr = data[key]
-                # Flatten last two dimensions for all extended keys
+                # 展平所有扩展键的最后两维
                 if key in flatten_keys and arr.ndim >= 2:
                     arr = arr.reshape(arr.shape[0], -1)
                 motion[key] = arr

@@ -14,6 +14,13 @@ from isaaclab_rl.rsl_rl.exporter import _OnnxPolicyExporter
 from wbc_robot.tasks.manager_based.wbc_robot.mdp import MotionCommand
 
 
+# ---------------------------------------------------------
+# 统一的策略导出函数 (Main Export Function)
+# 作用：根据传入的 task_type 参数，选择相应的具体 Exporter 类
+# (如从单个动作、多动作到GAEMimic多模态追踪)，
+# 将训练好的 PyTorch 神经网络模型 (Actor-Critic) 转化为跨平台的 ONNX 格式。
+# ONNX 是一种开放模型格式，它可以在仿真系统外、甚至是真实机器人硬件中进行快速推理。
+# ---------------------------------------------------------
 def export_motion_policy_as_onnx(
     env: ManagerBasedRLEnv | None,
     actor_critic: object,
@@ -39,6 +46,14 @@ def export_motion_policy_as_onnx(
     policy_exporter.export(path, filename)
 
 
+# ---------------------------------------------------------
+# 1. 单个动作的 ONNX 导出器 (Single Motion Policy Exporter) [早期简单实现]
+# 作用：除了将被训练的 Actor（策略网络）导出外，
+# 它还会「直接内嵌」那一个动作数据集 (关节位置、刚体轨迹等) 到模型之中。
+# 这样在模型推理时，只要传入目标 `time_step` (时间步)，
+# 推理模型除了给出动作外，还会返回那一个时刻动捕数据对应的参考位姿。
+# 注意：这种把数据硬编码进神经网络的做法在多动作时会大大膨胀模型体积。
+# ---------------------------------------------------------
 class _OnnxMotionPolicyExporter(_OnnxPolicyExporter):
     def __init__(self, env: ManagerBasedRLEnv, actor_critic, normalizer=None, verbose=False):
         super().__init__(actor_critic, normalizer, verbose)
@@ -89,6 +104,12 @@ class _OnnxMotionPolicyExporter(_OnnxPolicyExporter):
         )
 
 
+# ---------------------------------------------------------
+# 2. 单个动作的 ONNX 导出器 (改进版: 支持分开的观察空间输入)
+# 作用：与上面的类逻辑相似并将参考动作内嵌在模型里，
+# 改进在于它支持 env.observation_manager 分离的多块观察状态 (Observations)。
+# 它通过 `*args` 动态收集不同的观察数据拼成完整的 obs 张量并喂给 Actor。
+# ---------------------------------------------------------
 class _Onnx_Motion_PolicyExporter(_OnnxPolicyExporter):
     def __init__(self, env: ManagerBasedRLEnv, actor_critic, normalizer=None, verbose=False):
         super().__init__(actor_critic, normalizer, verbose)
@@ -157,6 +178,19 @@ class _Onnx_Motion_PolicyExporter(_OnnxPolicyExporter):
         )
 
 
+# ---------------------------------------------------------
+# 3. 多动作的 ONNX 导出器 (Multi-Motion Policy Exporter) [最常用的核心实现]
+# 作用：这专为包含成百上千个动捕文件的多动作追踪而设计 (我们代码中主用的版本)。
+# 因为动作太多了，不可能也不应该把 GB 级别的动作数据一股脑打包进 ONNX。
+# 
+# 所以在这个导出器里，它干脆 剥离了时间步参数和内部动作查询，
+# 只保留了纯粹的 Actor 模型：
+# 输入：当前系统的各项观察量拼接； 
+# 输出：机器人的动作指令(PID驱动/力矩等_具体看配置)。
+# 
+# 它的体积极小，运行极快，在实机部署中，动捕位姿的传入是依靠外围代码提供的，
+# 而不是在这个 `.onnx` 内部自己查表的。
+# ---------------------------------------------------------
 class _Onnx_MultiMotion_PolicyExporter(_OnnxPolicyExporter):
     def __init__(self, env: ManagerBasedRLEnv, actor_critic, normalizer=None, verbose=False):
         super().__init__(actor_critic, normalizer, verbose)

@@ -8,7 +8,8 @@ import torch
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
-
+# 它通过观察机器人在最近一个时间段内的历史表现（通过 Reward 奖励值来衡量），动态调整 motion（动作指令生成）中的 adaptive_uniform_ratio (均匀采样与自适应采样的混合比例)。
+# 换句话说：如果机器人最近表现变好了，就增加随机/均匀抽样的动作让它训练更多样化；如果还没学好，就不增加，让算法继续多练它不擅长的动作（自适应采样）。
 def adaptive_sampling_ratio(
     env: ManagerBasedRLEnv,
     env_ids: Sequence[int],
