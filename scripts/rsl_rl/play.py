@@ -74,7 +74,7 @@ from isaaclab.utils.pretrained_checkpoint import get_published_pretrained_checkp
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper, export_policy_as_jit, export_policy_as_onnx
 from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
-from rsl_rl.runners import OnPolicyRunner
+from rsl_rl.runners import OnPolicyRunner # type: ignore
 
 
 @hydra_task_config(args_cli.task, args_cli.agent)

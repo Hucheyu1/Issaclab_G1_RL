@@ -14,7 +14,7 @@ python scripts/tools/list_envs.py
 ## 🚀 快速开始 (Quick Start)
 
 ### 1. 数据集准备与安装
-首先需要克隆所需的机器人模型和动作数据集：
+首先需要克隆所需的机器人模型和动作数据集和修改后的强化学习库：
 
 ```bash
 # 下载 Unitree G1 机器人模型
@@ -23,6 +23,10 @@ git clone [https://huggingface.co/datasets/unitreerobotics/unitree_model](https:
 # 安装 Git LFS 并下载 GAE Mimic 动作数据集
 git lfs install
 git clone [https://www.modelscope.cn/datasets/seulzx/gae_mimic_dataset.git](https://www.modelscope.cn/datasets/seulzx/gae_mimic_dataset.git)
+
+# 安装修改后的rsl_rl（使用actor_critic_triple_ae与triple_ae_ppo）
+cd rsl_rl
+python -m pip install -e .
 ```
 ### 2. 数据集脚本工具说明
 
@@ -63,6 +67,7 @@ python scripts/replay_npz.py --motion_file datasets/extend_datasets/lafan1_datas
 ```bash
 # 全新训练 (无头模式)
 python scripts/rsl_rl/train.py --task Template-MultiTracking-Flat-G1-v0 --headless
+python scripts/rsl_rl/train.py --task Template-GAEMimic-Flat-G1-v0 --headless
 # 恢复训练 (加载指定的历史 Checkpoint)
 python scripts/rsl_rl/train.py --task Template-MultiTracking-Flat-G1-v0 --headless --resume --load_run 2026-05-16_20-58-44
 # 播放与测试 (可视化渲染，设置录制 1000 帧)
@@ -73,9 +78,10 @@ python scripts/rsl_rl/play.py --task Template-MultiTracking-Flat-G1-v0 --num_env
 ### 4. 查看训练日志
 ```bash
 tensorboard --logdir /root/gpufree-data/lab_lecture/wbc_robot/logs/rsl_rl/multi_g1_flat/
+tensorboard --logdir /root/gpufree-data/lab_lecture/wbc_robot/logs/rsl_rl/gaemimic_g1_flat/
 ```
 
-## ⚙️ 环境配置 (MDP Environment Setup)
+## ⚙️ MultiTracking 环境配置 (MDP Environment Setup)
 
 ### 5.1 动作、命令与事件 (Actions, Commands & Events)
 | 类别 | 模块项 | 详情描述 |
@@ -104,5 +110,58 @@ tensorboard --logdir /root/gpufree-data/lab_lecture/wbc_robot/logs/rsl_rl/multi_
 | `action_rate_l2` | **- 0.5** | *(中度惩罚)* 防止动作输出突变，保证电机平滑发力。 |
 | `joint_limit` | **- 10.0** | *(极其严厉)* 严禁关节突破物理限位，保护真机安全。 |
 
+## ⚙️ Deploy
+### Setup
+```bash
+# 安装 mujoco https://github.com/google-deepmind/mujoco/releases
+mkdir -p ~/.mujoco && tar -zxvf mujoco-3.8.0-linux-x86_64.tar.gz -C ~/.mujoco
 
+# C++ Simulator (simulate)
+sudo apt install libyaml-cpp-dev libspdlog-dev libboost-all-dev libglfw3-dev
+git clone https://github.com/unitreerobotics/unitree_sdk2.git
+cd unitree_sdk2/
+mkdir build && cd build
+cmake .. -DBUILD_EXAMPLES=OFF # Install on the /usr/local directory
+sudo make install
+
+# Python Simulator (simulate_python) (可选) https://github.com/unitreerobotics/unitree_mujoco?tab=readme-ov-file#installation
+cd ~
+git clone https://github.com/unitreerobotics/unitree_sdk2_python.git
+cd unitree_sdk2_python
+pip install -e .
+pip install mujoco
+pip install pygame
+
+# Compile unitree_mujoco
+git clone https://github.com/unitreerobotics/unitree_mujoco.git
+cd unitree_mujoco/simulate/
+ln -s ~/.mujoco/mujoco-3.8.0 mujoco
+cd unitree_mujoco/simulate
+mkdir build && cd build
+cmake ..
+make -j4
+
+# Compile the robot_controller
+cd deploy/robots/g1_29dof
+mkdir build && cd build
+cmake .. && make
+```
+
+### Sim2Sim
+```bash
+# Set the robot at /simulate/config.yaml to g1
+# Set domain_id to 0
+# Set enable_elastic_hand to 1
+# Set use_joystck to 1.
+# start simulation
+cd unitree_mujoco/simulate/build
+./unitree_mujoco
+# ./unitree_mujoco -i 0 -n eth0 -r g1 -s scene_29dof.xml # alternative
+cd unitree_rl_lab/deploy/robots/g1_29dof/build
+./g1_ctrl
+# 1. press [L2 + Up] to set the robot to stand up
+# 2. Click the mujoco window, and then press 8 to make the robot feet touch the ground.
+# 3. Press [R1 + X] to run the policy.
+# 4. Click the mujoco window, and then press 9 to disable the elastic band.
+```
 

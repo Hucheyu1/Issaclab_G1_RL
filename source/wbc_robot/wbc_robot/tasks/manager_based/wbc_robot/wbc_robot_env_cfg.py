@@ -256,6 +256,7 @@ class GAEMimic_ObservationsCfg:
 
         def __post_init__(self):
             self.enable_corruption = True
+            # 这行代码告诉物理引擎：“每一帧，请按从上到下的顺序收集这些数据，把它们像火腿肠一样首尾相连，拼接成一个长长的 1D 数组，然后丢给神经网络。”
             self.concatenate_terms = True
 
     @configclass
@@ -284,7 +285,7 @@ class GAEMimic_ObservationsCfg:
                 "frames": 10,
             },
         )
-
+        # 第一人称追踪误差 (Tracking Errors)
         motion_anchor_pos_b = ObsTerm(func=mdp.motion_anchor_pos_b, params={"command_name": "motion"})
         motion_anchor_ori_b = ObsTerm(func=mdp.motion_anchor_ori_b, params={"command_name": "motion"})
         body_pos = ObsTerm(func=mdp.robot_body_pos_b, params={"command_name": "motion"})

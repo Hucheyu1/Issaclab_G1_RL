@@ -88,7 +88,9 @@ def motion_anchor_ori_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor
     mat = matrix_from_quat(ori)
     return mat[..., :2].reshape(mat.shape[0], -1)
 
-
+# 从数据集中提取一段未来的机器人关节目标轨迹
+# frames=10, interval=2，它获取的不仅是当前帧的目标，还会每隔 2 步往后看，一共拿 10 帧的数据
+# 设你的控制步长是 0.02秒，间隔为 2 意味着每 0.04 秒采一帧，一共采 10 帧。这意味着网络不仅能看到当前时刻的目标，还能“预见”未来 0.4 秒的完整动作轨迹
 def motion_robot_joint_pos(
     env: ManagerBasedEnv,
     command_name: str,
