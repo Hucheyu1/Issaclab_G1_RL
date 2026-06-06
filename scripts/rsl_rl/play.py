@@ -35,6 +35,7 @@ parser.add_argument(
 )
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
 parser.add_argument("--motion_file", type=str, default=None, help="Path to the motion file.")
+parser.add_argument("--activate_signals", type=str, default=None, choices=["robot", "smplx", "keypoints"], help="Override the active signals modality during testing.")
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -72,6 +73,7 @@ from isaaclab.utils.assets import retrieve_file_path
 from isaaclab.utils.dict import print_dict
 from isaaclab.utils.pretrained_checkpoint import get_published_pretrained_checkpoint
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper, export_policy_as_jit, export_policy_as_onnx
+from wbc_robot.utils.exporter import export_motion_policy_as_onnx, attach_onnx_metadata
 from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
 from rsl_rl.runners import OnPolicyRunner # type: ignore
@@ -134,6 +136,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     print(f"[INFO]: Loading model checkpoint from: {resume_path}")
     # load previously trained model
+    # === [新增配置] 动态覆盖测试推断通道 ===
+    if hasattr(agent_cfg.policy, "activate_signals"):
+        if args_cli.activate_signals is not None:
+            agent_cfg.policy.activate_signals = args_cli.activate_signals
     ppo_runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
     ppo_runner.load(resume_path)
 
@@ -152,9 +158,70 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # export policy to onnx/jit
     export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")
     export_policy_as_jit(policy_nn, ppo_runner.obs_normalizer, path=export_model_dir, filename="policy.pt")
-    export_policy_as_onnx(
-        policy_nn, normalizer=ppo_runner.obs_normalizer, path=export_model_dir, filename="policy.onnx"
-    )
+
+    # # === 替换为你的自定义导出逻辑 ===
+    # if agent_cfg.class_name in ["ActorCritic_Triple_AE", "ActorCritic_Triple_AE_Single_Finetune", "ActorCritic_Dual_AE"]:
+    #     # 假设你只需要导出给实机机器人运行的版本 (_robot.onnx)
+    #     export_motion_policy_as_onnx(
+    #         env.unwrapped,
+    #         policy_nn,                     # 传入当前跑通的 policy
+    #         task_type="gae_mimic",         # 指定任务类型
+    #         gaemimic_task="robot",         # 指定只导出 robot 适配的计算图
+    #         normalizer=ppo_runner.obs_normalizer,
+    #         path=export_model_dir,
+    #         filename="policy.onnx"
+    #     )
+    # else:
+    #     export_policy_as_onnx(
+    #         policy_nn, normalizer=ppo_runner.obs_normalizer, path=export_model_dir, filename="policy.onnx"
+    #     )
+
+    # === 运行导出逻辑 ===
+    # 从环境配置中动态获取 task_type（默认回退到 multi_motion）
+    current_task_type = getattr(env_cfg, "task_type", "multi_motion")
+    if current_task_type in ["single_motion", "multi_motion"]:
+        # 内部已经集成了对不同算法架构（多模态架构或标准MLP算法）的支持
+        export_motion_policy_as_onnx(
+            env.unwrapped,
+            policy_nn,                     # 传入当前跑通的 policy
+            task_type=current_task_type,   # 动态传入从 env_cfg 中获取的任务类型
+            normalizer=ppo_runner.obs_normalizer,
+            path=export_model_dir,
+            filename="policy.onnx"
+        )
+
+    elif current_task_type == "gae_mimic":
+        print(f"[INFO] 当前测试开启的模态控制分支为: {policy_nn.activate_signals}")
+        # => 子任务 1/3: 导出专注于“实机端机器人关节信号驱动”的纯净计算版 (_robot.onnx)
+        export_motion_policy_as_onnx(
+            env.unwrapped,
+            policy_nn,                     
+            task_type=current_task_type,   
+            gaemimic_task="robot",         
+            normalizer=ppo_runner.obs_normalizer,
+            path=export_model_dir,
+            filename="robot_policy.onnx"
+        )
+        # => 子任务 2/3: 导出专注于“人体SMPL-X动捕驱动重定向”的计算版 (_human.onnx)
+        export_motion_policy_as_onnx(
+            env.unwrapped,
+            policy_nn,                     
+            task_type=current_task_type,   
+            gaemimic_task="human",         
+            normalizer=ppo_runner.obs_normalizer,
+            path=export_model_dir,
+            filename="human_policy.onnx"
+        )
+        # => 子任务 3/3: 导出专注验证“追踪3D零散关键点流”的纯净版 (_keypoints.onnx)
+        export_motion_policy_as_onnx(
+            env.unwrapped,
+            policy_nn,                     
+            task_type=current_task_type,   
+            gaemimic_task="keypoints",         
+            normalizer=ppo_runner.obs_normalizer,
+            path=export_model_dir,
+            filename="keypoints_policy.onnx"
+        )
 
     dt = env.unwrapped.step_dt
 

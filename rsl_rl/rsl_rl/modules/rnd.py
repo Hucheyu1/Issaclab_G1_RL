@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
-
+from tensordict import TensorDict
+from rsl_rl.env import VecEnv
 from rsl_rl.modules.normalizer import EmpiricalDiscountedVariationNormalization, EmpiricalNormalization
 from rsl_rl.utils import resolve_nn_activation
 
@@ -194,3 +195,31 @@ class RandomNetworkDistillation(nn.Module):
             return self.initial_weight + (final_value - self.initial_weight) * (step - initial_step) / (
                 final_step - initial_step
             )
+        
+def resolve_rnd_config(alg_cfg: dict, obs: TensorDict, obs_groups: dict[str, list[str]], env: VecEnv) -> dict:
+    """Resolve the RND configuration.
+
+    Args:
+        alg_cfg: Algorithm configuration dictionary.
+        obs: Observation dictionary.
+        obs_groups: Observation groups dictionary.
+        env: Environment object.
+
+    Returns:
+        The resolved algorithm configuration dictionary.
+    """
+    # Resolve dimension of rnd gated state
+    if "rnd_cfg" in alg_cfg and alg_cfg["rnd_cfg"] is not None:
+        # Get dimension of rnd gated state
+        num_rnd_state = 0
+        for obs_group in obs_groups["rnd_state"]:
+            assert len(obs[obs_group].shape) == 2, "The RND module only supports 1D observations."
+            num_rnd_state += obs[obs_group].shape[-1]
+        # Add rnd gated state to config
+        alg_cfg["rnd_cfg"]["num_states"] = num_rnd_state
+        alg_cfg["rnd_cfg"]["obs_groups"] = obs_groups
+        # Scale down the rnd weight with timestep
+        alg_cfg["rnd_cfg"]["weight"] *= env.unwrapped.step_dt
+    else:
+        alg_cfg["rnd_cfg"] = None
+    return alg_cfg

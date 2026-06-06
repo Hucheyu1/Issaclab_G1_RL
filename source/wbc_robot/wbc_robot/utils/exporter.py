@@ -231,6 +231,10 @@ class _Onnx_MultiMotion_PolicyExporter(_OnnxPolicyExporter):
 
 
 def register_forward(version):
+    """
+    装饰器：用于标记此方法属于哪个特定任务（如 "robot", "human" 等）。
+    它会在函数上打个 `_forward_version` 的标签，以便后续给类实例化时匹配提取。
+    """
     def decorator(func):
         func._forward_version = version
         return func
@@ -239,15 +243,21 @@ def register_forward(version):
 
 
 def select_forward(cls):
+    """
+    类装饰器：在类实例化时，根据用户传入的 `task` 属性，动态挑选与之匹配的前向逻辑方法，强行将其绑定为 `self.forward`。
+    这样做的目的是：在 ONNX 导出时避免在 forward 函数内出现 if-else 分支，以确保静态计算图能正确构建并导出纯粹的特化模型。
+    """
     original_init = cls.__init__
 
     def new_init(self, *args, **kwargs):
+        # 执行原本的 __init__ 过程
         original_init(self, *args, **kwargs)
 
         if not hasattr(self, "task"):
             raise AttributeError("Instance must have 'task' attribute after __init__")
 
         chosen_method = None
+        # 遍历类中所有方法，寻找那个携带有被 @register_forward 标记且等于期望 task 的方法
         for name in dir(cls):
             method = getattr(cls, name)
             if callable(method) and hasattr(method, "_forward_version"):
@@ -258,6 +268,7 @@ def select_forward(cls):
         if chosen_method is None:
             raise ValueError(f"No forward implementation for task: {self.task}")
 
+        # 动态将挑选出的方法覆盖为当前对象的 forward() 方法
         self.forward = chosen_method.__get__(self, cls)
 
     cls.__init__ = new_init
@@ -266,11 +277,10 @@ def select_forward(cls):
 
 @select_forward
 class _Onnx_GAEMimic_PolicyExporter(_OnnxPolicyExporter):
-    """Keypoints Policy Exporter for SONIC architecture.
-
-    This exporter exports only the keypoints command branch of the Actor_SONIC policy.
-    It uses the keypoints_encoder, FSQ quantizer, and action decoder.
-    Always exports with separate inputs for each observation term (excluding robot_command).
+    """
+    针对 SONIC（多模态/GAE拟合）架构专用的策略 ONNX 导出器。
+    该类会根据传入任务类型（机器人硬件、人类动捕、三维关键点），剔除无用的输入配置，
+    实现只导出“专门对口”那一模态的轻量化模型。
     """
 
     def __init__(
@@ -285,7 +295,7 @@ class _Onnx_GAEMimic_PolicyExporter(_OnnxPolicyExporter):
 
         self.task = task
 
-        # Extract Actor_SONIC specific dimensions
+        # 从策略网络中抽取三大不同模态输入特征的维度数
         assert (
             hasattr(actor_critic.actor, "actor_sk_dim")
             and hasattr(actor_critic.actor, "actor_sg_dim")
@@ -298,31 +308,34 @@ class _Onnx_GAEMimic_PolicyExporter(_OnnxPolicyExporter):
 
         self.num_actions = actor_critic.actor.num_actions
 
-        # Extract observation manager info and filter for human only
+        # 获取环境的所有观察向量名称与维度数
         all_obs_names = env.observation_manager.active_terms["policy"]
         group_obs_term_dim = env.observation_manager._group_obs_term_dim["policy"]
         all_obs_dims = [dims[-1] for dims in group_obs_term_dim]
 
-        # Filter command
+        # ---------------------------------------------------------
+        # 根据不同模态，过滤掉不属于该模态的命令参数 (如：导出 robot 版就不该需要 human 的观测项)
+        # ---------------------------------------------------------
+        
+        # 构建机器人端专属的观察维度
         self.robot_observation_names = []
         self.robot_observation_dims = []
-
         for i, name in enumerate(all_obs_names):
             if name not in ["human_command", "keypoints_command"]:
                 self.robot_observation_names.append(name)
                 self.robot_observation_dims.append(all_obs_dims[i])
 
+        # 构建人体验证端专属的观察维度
         self.human_observation_names = []
         self.human_observation_dims = []
-
         for i, name in enumerate(all_obs_names):
             if name not in ["robot_command", "keypoints_command"]:
                 self.human_observation_names.append(name)
                 self.human_observation_dims.append(all_obs_dims[i])
 
+        # 构建关键点追踪专属的观察维度
         self.keypoints_observation_names = []
         self.keypoints_observation_dims = []
-
         for i, name in enumerate(all_obs_names):
             if name not in ["robot_command", "human_command"]:
                 self.keypoints_observation_names.append(name)
@@ -330,13 +343,15 @@ class _Onnx_GAEMimic_PolicyExporter(_OnnxPolicyExporter):
 
     @register_forward("robot")
     def forward_robot(self, *args):
+        """实机端使用的计算支路"""
         obs = torch.cat(args, dim=-1)
-        robot_command = obs[:, : self.actor_sg_dim]
-        proprioceptive_state = obs[:, self.actor_sg_dim :]
+        robot_command = obs[:, : self.actor_sg_dim]          # 取出机器人指令段
+        proprioceptive_state = obs[:, self.actor_sg_dim :]   # 取出余下的一般本体状态段
         return self.actor.forward_robot_exporter(robot_command, proprioceptive_state)
 
     @register_forward("human")
     def forward_human(self, *args):
+        """人体重定向/拟合使用的计算支路"""
         obs = torch.cat(args, dim=-1)
         human_command = obs[:, : self.actor_sh_dim]
         proprioceptive_state = obs[:, self.actor_sh_dim :]
@@ -344,14 +359,17 @@ class _Onnx_GAEMimic_PolicyExporter(_OnnxPolicyExporter):
 
     @register_forward("keypoints")
     def forward_keypoints(self, *args):
+        """关键点轨迹跟随使用的计算支路"""
         obs = torch.cat(args, dim=-1)
         keypoints_command = obs[:, : self.actor_sk_dim]
         proprioceptive_state = obs[:, self.actor_sk_dim :]
         return self.actor.forward_keypoints_exporter(keypoints_command, proprioceptive_state)
 
     def export(self, path, filename):
+        """基于分离好的模态计算流和占位符(Dummy Inputs) 执行 ONNX 计算图编排与导出"""
         self.to("cpu")
 
+        # 将当前所需要匹配的模态输入维度套现
         if self.task == "robot":
             self.observation_names = self.robot_observation_names
             self.observation_dims = self.robot_observation_dims
@@ -364,27 +382,32 @@ class _Onnx_GAEMimic_PolicyExporter(_OnnxPolicyExporter):
         else:
             raise ValueError(f"Unknown task for GAEMimic exporter: {self.task}")
 
-        # Create separate dummy inputs for each observation term (excluding robot_command)
+        # 使用上述分离出来的维度建立虚拟(Zeros)张量输入，ONNX 需要利用它们跑一次假推导来锁定模型拓扑结构
         dummy_inputs = []
         for dim in self.observation_dims:
             dummy_inputs.append(torch.zeros(1, dim))
 
         input_names = list(self.observation_names)
 
+        # PyTorch内部提供的核心导出调用点
         torch.onnx.export(
             self,
             tuple(dummy_inputs),
             os.path.join(path, filename),
-            export_params=True,
-            opset_version=11,
+            export_params=True,             # 是否随同代码拓扑存入训练获取的权重
+            opset_version=11,               # 推演用的ONNX算子协议版本
             verbose=self.verbose,
-            input_names=input_names,
-            output_names=["actions"],
+            input_names=input_names,        # 每项观测名称对应独立输口标记
+            output_names=["actions"],       # 模型对外输口仅包含生成的控制参数
             dynamic_axes={},
         )
 
 
 def list_to_csv_str(arr, *, decimals: int = 3, delimiter: str = ",") -> str:
+    """
+    工具函数：将列表或数组转换为 CSV 格式的字符串，通常用于将结构化信息打包塞进 ONNX 属性中。
+    如果是浮点数，默认保留 3 位小数。
+    """
     fmt = f"{{:.{decimals}f}}"
     return delimiter.join(
         fmt.format(x) if isinstance(x, (int, float)) else str(x)
@@ -393,36 +416,48 @@ def list_to_csv_str(arr, *, decimals: int = 3, delimiter: str = ",") -> str:
 
 
 def attach_onnx_metadata(env: ManagerBasedRLEnv, run_path: str, path: str, filename="policy.onnx") -> None:
+    """
+    用于在已导出的 ONNX 模型中“注入”仿真环境的元数据（Metadata）。
+    在 Sim-to-Real 的实机部署中，实机控制器需要知道对应训练环境的许多超参数设定，例如关节名称顺序、
+    关节刚度 (stiffness)、阻尼 (damping)、动作缩放比例 (action_scale) 等。
+    借由这个函数，部署端的 C++/Python 程序在加载 ONNX 时就能自动抽取恢复这些配置，免去了手动校对的麻烦与出错风险。
+    """
     onnx_path = os.path.join(path, filename)
 
+    # 获取策略网络所需的环境观察项名称
     observation_names = env.observation_manager.active_terms["policy"]
     observation_dims: list[int] = []  # Add observation dimensions
 
     # Get observation dimensions for each group
+    # 提取每组观测项对应的特征维度尺寸
     group_obs_term_dim = env.observation_manager._group_obs_term_dim["policy"]  # list[list[int]]
     observation_dims = [dims[-1] for dims in group_obs_term_dim]
 
+    # 整理要写入 ONNX 的元数据字典
     metadata = {
-        "run_path": run_path,
-        "joint_names": env.scene["robot"].data.joint_names,
-        "body_names": env.scene["robot"].data.body_names,
-        "joint_stiffness": env.scene["robot"].data.joint_stiffness[0].cpu().tolist(),
-        "joint_damping": env.scene["robot"].data.joint_damping[0].cpu().tolist(),
-        "default_joint_pos": env.scene["robot"].data.default_joint_pos_nominal.cpu().tolist(),
-        "command_names": env.command_manager.active_terms,
-        "observation_names": observation_names,
-        "observation_dims": observation_dims,  # Add to metadata
-        "action_scale": env.action_manager.get_term("joint_pos")._scale[0].cpu().tolist(),
-        "anchor_body_name": env.command_manager.get_term("motion").cfg.anchor_body_name,
-        "tracking_body_names": env.command_manager.get_term("motion").cfg.body_names,
+        "run_path": run_path,  # 模型对应的训练数据路径
+        "joint_names": env.scene["robot"].data.joint_names,  # 机器人关节名称数组（用于在实机中对齐控制指令顺序）
+        "body_names": env.scene["robot"].data.body_names,    # 机器人刚体部位名称数组
+        "joint_stiffness": env.scene["robot"].data.joint_stiffness[0].cpu().tolist(),  # PD 伺服控制系统的 P 参数
+        "joint_damping": env.scene["robot"].data.joint_damping[0].cpu().tolist(),      # PD 伺服控制系统的 D 参数
+        "default_joint_pos": env.scene["robot"].data.default_joint_pos_nominal.cpu().tolist(), # 机器人的默认站立关节角度（零点/初始位姿）
+        "command_names": env.command_manager.active_terms,   # 命令管理器当前激活的命令项
+        "observation_names": observation_names,              # 各段状态观测空间的名称
+        "observation_dims": observation_dims,  # Add to metadata # 各段状态空间的维度大小
+        "action_scale": env.action_manager.get_term("joint_pos")._scale[0].cpu().tolist(), # 动作补偿在发往底层前被放大的缩放率 (Action Scale)
+        "anchor_body_name": env.command_manager.get_term("motion").cfg.anchor_body_name,   # 运动追踪指定的基准躯体（通常是根节点如 pelvis/root）
+        "tracking_body_names": env.command_manager.get_term("motion").cfg.body_names,      # 正在参与运动追踪匹配的其他身体部位名称
     }
 
+    # 加载已存在的基础 ONNX 模型
     model = onnx.load(onnx_path)
 
+    # 遍历元数据字典，将每个键值对转换为字符串原型后，插入到 ONNX 的 metadata props 列表中
     for k, v in metadata.items():
         entry = onnx.StringStringEntryProto()
         entry.key = k
         entry.value = list_to_csv_str(v) if isinstance(v, list) else str(v)
         model.metadata_props.append(entry)
 
+    # 封存携带有完整附加物理与环境信息的全新 ONNX 模型文件
     onnx.save(model, onnx_path)

@@ -6,5 +6,11 @@
 """Definitions for neural networks."""
 
 from .memory import Memory
+from .mlp import MLP
+from .cnn import CNN
 
-__all__ = ["Memory"]
+__all__ = [
+    "CNN",
+    "MLP",
+    "Memory",
+]

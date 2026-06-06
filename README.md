@@ -71,8 +71,11 @@ python scripts/rsl_rl/train.py --task Template-GAEMimic-Flat-G1-v0 --headless
 # 恢复训练 (加载指定的历史 Checkpoint)
 python scripts/rsl_rl/train.py --task Template-MultiTracking-Flat-G1-v0 --headless --resume --load_run 2026-05-16_20-58-44
 # 播放与测试 (可视化渲染，设置录制 1000 帧)
+# --load_run：指定要加载哪个日期/名称的训练文件夹。
+# --checkpoint：指定加载该文件夹下的哪一个 .pt 权重文件
 python scripts/rsl_rl/play.py --task Template-MultiTracking-Flat-G1-v0 --headless --video --video_length 1000 --num_envs 1
 python scripts/rsl_rl/play.py --task Template-MultiTracking-Flat-G1-v0 --num_envs 1 --motion_file datasets/extend_datasets/lafan1_dataset/g1/train/dance1_subject1.npz
+python scripts/rsl_rl/play.py --task Template-GAEMimic-Flat-G1-v0 --num_envs 1 --motion_file datasets/extend_datasets/lafan1_dataset/g1/train/dance1_subject1.npz --activate_signals keypoints
 ```
 
 ### 4. 查看训练日志
