@@ -46,6 +46,9 @@ inline YAML::Node config;
 inline bool auto_mimic_enabled = false;
 inline double auto_mimic_fixstand_duration = 3.2;
 inline std::string auto_mimic_state = "Mimic_Multi_G1_Flat";
+inline std::string mimic_override_state = "";
+inline std::string mimic_motion_file = "";
+inline float mimic_fps = 0.0f;
 
 inline std::filesystem::path get_bin_path() {
     std::vector<char> path(1024);
@@ -137,6 +140,8 @@ inline po::variables_map helper(int argc, char** argv)
         ("auto_mimic", "start from FixStand and automatically switch to a mimic FSM state")
         ("fixstand_duration", po::value<double>()->default_value(3.2), "seconds to stay in FixStand before auto mimic")
         ("mimic_state", po::value<std::string>()->default_value("Mimic_Multi_G1_Flat"), "target mimic FSM state for --auto_mimic")
+        ("mimic_motion_file", po::value<std::string>()->default_value(""), "override motion CSV for the selected mimic FSM state")
+        ("mimic_fps", po::value<float>()->default_value(0.0f), "override motion fps when --mimic_motion_file is used; 0 keeps config fps")
         ;
 
     po::variables_map vm;

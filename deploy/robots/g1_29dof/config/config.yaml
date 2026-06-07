@@ -114,7 +114,7 @@ FSM:
       Passive: LT + B.on_pressed
       Velocity: RB + X.on_pressed
     fps: 50
-    motion_file: config/policy/mimic/multi_g1_flat/params/dance1_subject1_50hz.csv
+    motion_file: config/policy/mimic/data/base/dance1_subject1_50hz.csv
     policy_dir: config/policy/mimic/multi_g1_flat/
     time_start: 0.0
   Mimic_GAEMimic_Policy:
@@ -122,7 +122,7 @@ FSM:
       Passive: LT + B.on_pressed
       Velocity: RB + X.on_pressed
     fps: 50
-    motion_file: config/policy/mimic/gaemimic_policy/params/dance1_subject1_50hz.csv
+    motion_file: config/policy/mimic/data/base/dance1_subject1_50hz.csv
     policy_dir: config/policy/mimic/gaemimic_policy/
     time_start: 0.0
     bad_orientation_limit: 1.0
@@ -132,7 +132,7 @@ FSM:
       Passive: LT + B.on_pressed
       Velocity: RB + X.on_pressed
     fps: 50
-    motion_file: config/policy/mimic/gaemimic_robot/params/dance1_subject1_50hz.csv
+    motion_file: config/policy/mimic/data/base/dance1_subject1_50hz.csv
     policy_dir: config/policy/mimic/gaemimic_robot/
     time_start: 0.0
     bad_orientation_limit: 1.0
@@ -142,7 +142,7 @@ FSM:
       Passive: LT + B.on_pressed
       Velocity: RB + X.on_pressed
     fps: 50
-    motion_file: config/policy/mimic/gaemimic_human/params/dance1_subject1_50hz.csv
+    motion_file: config/policy/mimic/data/human/dance1_subject1_50hz.csv
     policy_dir: config/policy/mimic/gaemimic_human/
     time_start: 0.0
     bad_orientation_limit: 1.0
@@ -152,7 +152,7 @@ FSM:
       Passive: LT + B.on_pressed
       Velocity: RB + X.on_pressed
     fps: 50
-    motion_file: config/policy/mimic/gaemimic_keypoints/params/dance1_subject1_50hz.csv
+    motion_file: config/policy/mimic/data/keypoints/dance1_subject1_50hz.csv
     policy_dir: config/policy/mimic/gaemimic_keypoints/
     time_start: 0.0
     bad_orientation_limit: 1.0

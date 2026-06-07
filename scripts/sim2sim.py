@@ -709,6 +709,21 @@ def _save_motion_json(motion: np.lib.npyio.NpzFile, motion_file: Path) -> None:
     print(f"[INFO]: Motion data saved to: {json_filename}")
 
 
+def _render_camera(model: mujoco.MjModel) -> mujoco.MjvCamera:
+    camera = mujoco.MjvCamera()
+    mujoco.mjv_defaultFreeCamera(model, camera)
+    camera.distance = 3.0
+    camera.azimuth = 135.0
+    camera.elevation = -18.0
+    return camera
+
+
+def _update_render_camera(camera: mujoco.MjvCamera, data: mujoco.MjData) -> None:
+    camera.lookat[0] = data.qpos[0]
+    camera.lookat[1] = data.qpos[1]
+    camera.lookat[2] = data.qpos[2] + 0.35
+
+
 def run_simulation(
     robot_type: str,
     motion_file: str | Path,
@@ -722,6 +737,10 @@ def run_simulation(
     decimation: int = CONTROL_DECIMATION,
     max_steps: int | None = None,
     init_from_motion: bool = True,
+    video_path: str | Path | None = None,
+    video_fps: int = 30,
+    video_width: int = 960,
+    video_height: int = 540,
 ) -> None:
     config = ROBOT_CONFIGS[robot_type]
     motion_file = _resolve_motion_file(motion_file)
@@ -864,6 +883,37 @@ def run_simulation(
         if loop or timestep + 1 < num_frames:
             timestep += 1
 
+    if video_path is not None:
+        import imageio.v2 as imageio
+
+        output_path = Path(video_path).expanduser()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        renderer = mujoco.Renderer(model, height=video_height, width=video_width)
+        camera = _render_camera(model)
+        next_frame_time = 0.0
+        frame_dt = 1.0 / video_fps
+        frames = 0
+
+        print(
+            f"[INFO]: Recording video: {output_path} "
+            f"duration={duration:g}s fps={video_fps} size={video_width}x{video_height}"
+        )
+        try:
+            with imageio.get_writer(output_path, fps=video_fps, codec="libx264", quality=8) as writer:
+                for step in range(total_steps):
+                    step_once()
+                    sim_time = (step + 1) * dt
+                    if sim_time + 1e-12 >= next_frame_time:
+                        _update_render_camera(camera, data)
+                        renderer.update_scene(data, camera=camera)
+                        writer.append_data(renderer.render())
+                        frames += 1
+                        next_frame_time += frame_dt
+            print(f"[INFO]: Video saved: {output_path} frames={frames}")
+        finally:
+            renderer.close()
+        return
+
     if headless:
         for _ in range(total_steps):
             step_once()
@@ -915,6 +965,10 @@ def main() -> None:
     parser.add_argument("--dt", type=float, default=SIMULATION_DT, help="MuJoCo physics timestep.")
     parser.add_argument("--decimation", type=int, default=CONTROL_DECIMATION, help="Policy control decimation.")
     parser.add_argument("--max_steps", type=int, default=None, help="Maximum physics steps for headless smoke tests.")
+    parser.add_argument("--video_path", type=str, default=None, help="Record an offscreen MP4 video to this path.")
+    parser.add_argument("--video_fps", type=int, default=30, help="Recorded video FPS.")
+    parser.add_argument("--video_width", type=int, default=960, help="Recorded video width.")
+    parser.add_argument("--video_height", type=int, default=540, help="Recorded video height.")
     parser.add_argument(
         "--no_init_from_motion",
         action="store_true",
@@ -944,6 +998,10 @@ def main() -> None:
         decimation=args.decimation,
         max_steps=args.max_steps,
         init_from_motion=not args.no_init_from_motion,
+        video_path=args.video_path,
+        video_fps=args.video_fps,
+        video_width=args.video_width,
+        video_height=args.video_height,
     )
 
 

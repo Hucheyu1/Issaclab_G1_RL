@@ -171,7 +171,9 @@ cd unitree_rl_lab/deploy/robots/g1_29dof/build
 # 4. Click the mujoco window, and then press 9 to disable the elastic band.
 # 没手柄(让AI写)
 ./g1_ctrl -n lo --auto_mimic
-./g1_ctrl -n lo --auto_mimic  --mimic_state Mimic_GAEMimic_Robot
+./g1_ctrl -n lo --auto_mimic  --mimic_state Mimic_GAEMimic_Robot --mimic_motion_file config/policy/mimic/data/base/walk1_subject1_50hz.csv
+# Mimic_GAEMimic_Human 使用 config/policy/mimic/data/human/*.csv
+# Mimic_GAEMimic_Keypoints 使用 config/policy/mimic/data/keypoints/*.csv
 # Mimic_GAEMimic_Keypoints  Mimic_GAEMimic_Human  Mimic_GAEMimic_Robot  Mimic_GAEMimic_Policy  Mimic_Multi_G1_Flat Mimic_Dance_102 Mimic_Gangnam_Style Velocity
 ```
 

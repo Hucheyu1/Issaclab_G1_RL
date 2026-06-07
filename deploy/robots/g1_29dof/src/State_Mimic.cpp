@@ -174,12 +174,25 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
     auto articulation = std::make_shared<unitree::BaseArticulation<LowState_t::SharedPtr>>(FSMState::lowstate);
 
     std::filesystem::path motion_file = cfg["motion_file"].as<std::string>();
+    float motion_fps = cfg["fps"].as<float>();
+    if(!param::mimic_motion_file.empty() && state_string == param::mimic_override_state) {
+        motion_file = param::mimic_motion_file;
+        if(param::mimic_fps > 0.0f) {
+            motion_fps = param::mimic_fps;
+        }
+        spdlog::info(
+            "Override State_{} motion file with '{}' at {:.2f} fps",
+            state_string,
+            motion_file.string(),
+            motion_fps
+        );
+    }
     if(!motion_file.is_absolute()) {
         motion_file = param::proj_dir / motion_file;
     }
 
     // Motion
-    motion_ = std::make_shared<MotionLoader_>(motion_file.string(), cfg["fps"].as<float>());
+    motion_ = std::make_shared<MotionLoader_>(motion_file.string(), motion_fps);
     spdlog::info("Loaded motion file '{}' with duration {:.2f}s", motion_file.stem().string(), motion_->duration);
     motion = motion_;
     if(cfg["time_start"]) {

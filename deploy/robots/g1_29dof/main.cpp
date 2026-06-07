@@ -47,6 +47,9 @@ int main(int argc, char** argv)
     param::auto_mimic_enabled = vm.count("auto_mimic") > 0;
     param::auto_mimic_state = vm["mimic_state"].as<std::string>();
     param::auto_mimic_fixstand_duration = vm["fixstand_duration"].as<double>();
+    param::mimic_override_state = param::auto_mimic_enabled ? param::auto_mimic_state : vm["start_state"].as<std::string>();
+    param::mimic_motion_file = vm["mimic_motion_file"].as<std::string>();
+    param::mimic_fps = vm["mimic_fps"].as<float>();
     
     // Initialize FSM
     auto fsm = std::make_unique<CtrlFSM>(param::config["FSM"]);
