@@ -4,14 +4,15 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import os
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import onnx
 import torch
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab_rl.rsl_rl.exporter import _OnnxPolicyExporter
 
-from wbc_robot.tasks.manager_based.wbc_robot.mdp import MotionCommand
+if TYPE_CHECKING:
+    from wbc_robot.tasks.manager_based.wbc_robot.mdp.commands import MotionCommand
 
 
 # ---------------------------------------------------------

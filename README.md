@@ -70,6 +70,7 @@ python scripts/rsl_rl/train.py --task Template-MultiTracking-Flat-G1-v0 --headle
 python scripts/rsl_rl/train.py --task Template-GAEMimic-Flat-G1-v0 --headless
 # 恢复训练 (加载指定的历史 Checkpoint)
 python scripts/rsl_rl/train.py --task Template-MultiTracking-Flat-G1-v0 --headless --resume --load_run 2026-05-16_20-58-44
+python scripts/rsl_rl/train.py --task Template-GAEMimic-Flat-G1-v0 --headless --resume --load_run 2026-05-21_12-27-17
 # 播放与测试 (可视化渲染，设置录制 1000 帧)
 # --load_run：指定要加载哪个日期/名称的训练文件夹。
 # --checkpoint：指定加载该文件夹下的哪一个 .pt 权重文件
@@ -152,19 +153,48 @@ cmake .. && make
 
 ### Sim2Sim
 ```bash
-# Set the robot at /simulate/config.yaml to g1
-# Set domain_id to 0
-# Set enable_elastic_hand to 1
-# Set use_joystck to 1.
+# 修改 /simulate/config.yaml
 # start simulation
-cd unitree_mujoco/simulate/build
-./unitree_mujoco
-# ./unitree_mujoco -i 0 -n eth0 -r g1 -s scene_29dof.xml # alternative
+# Backspace       reset MuJoCo 仿真数据，机器人回初始姿态
+# 9               开/关弹性吊带，仅 enable_elastic_band: 1 时有效
+# 7 或 ↑方向键     缩短吊带长度，仅 enable_elastic_band: 1 时有效
+# 8 或 ↓方向键     增加吊带长度，仅 enable_elastic_band: 1 时有效
+# 启动 Unitree MuJoCo
+cd /root/unitree_mujoco/simulate/build
+./unitree_mujoco -r g1 -s scene_29dof.xml -i 0 -n lo
+# 启动 deploy 控制器
 cd unitree_rl_lab/deploy/robots/g1_29dof/build
 ./g1_ctrl
 # 1. press [L2 + Up] to set the robot to stand up
 # 2. Click the mujoco window, and then press 8 to make the robot feet touch the ground.
 # 3. Press [R1 + X] to run the policy.
 # 4. Click the mujoco window, and then press 9 to disable the elastic band.
+# 没手柄(让AI写)
+./g1_ctrl -n lo --auto_mimic
 ```
 
+
+### Sim2Sim-py
+```bash
+# 打开 MuJoCo 窗口运行时，去掉 --headless --max_steps 12
+# 用 --policy_path 指定任意一个 ONNX，用 --motion_file 指定 .npz 或动作目录。目录模式会默认选择 dance1_subject1.npz
+python scripts/sim2sim.py \
+  --robot g1 \
+  --motion_file datasets/extend_datasets/lafan1_dataset/g1/train/ \
+  --policy_path /root/gpufree-data/lab_lecture/wbc_robot/logs/rsl_rl/gaemimic_g1_flat/2026-05-21_12-27-17/exported/robot_policy.onnx \
+  --headless \
+  --max_steps 12
+
+python scripts/sim2sim.py \
+  --robot g1 \
+  --motion_file datasets/extend_datasets/lafan1_dataset/g1/train/ \
+  --policy_path /root/gpufree-data/lab_lecture/wbc_robot/logs/rsl_rl/multi_g1_flat/2026-05-20_14-58-09/exported/policy.onnx
+```
+
+```bash
+# 默认是 kinematic 精确回放模式，也就是每一帧直接把 motionfile 的姿态写给 MuJoCo：--mode pd：用电机力矩跟踪关节目标，适合看物理跟踪效果
+python scripts/motion2sim.py \
+  --motion_file datasets/extend_datasets/lafan1_dataset/g1/train/dance1_subject1.npz
+
+python scripts/motion2sim.py --mode pd
+```
