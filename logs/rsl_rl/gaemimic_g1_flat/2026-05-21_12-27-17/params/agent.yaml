@@ -1,0 +1,82 @@
+seed: 42
+device: cuda:0
+num_steps_per_env: 24
+max_iterations: 50000
+empirical_normalization: false
+policy:
+  class_name: ActorCritic_Triple_AE
+  init_noise_std: 1.0
+  noise_std_type: scalar
+  actor_hidden_dims:
+  - 512
+  - 256
+  - 128
+  critic_hidden_dims:
+  - 512
+  - 256
+  - 128
+  activation: elu
+  actor_sg_dim: 290
+  actor_sh_dim: 1260
+  actor_sk_dim: 450
+  latent_dim: 64
+  activate_signals: robot
+  robot_encoder_hidden_dims:
+  - 512
+  - 256
+  - 128
+  human_encoder_hidden_dims:
+  - 512
+  - 256
+  - 128
+  keypoints_encoder_hidden_dims:
+  - 512
+  - 256
+  - 128
+  robot_decoder_hidden_dims:
+  - 128
+  - 256
+  - 512
+  human_decoder_hidden_dims:
+  - 128
+  - 256
+  - 512
+  keypoints_decoder_hidden_dims:
+  - 128
+  - 256
+  - 512
+algorithm:
+  class_name: Triple_AE_PPO
+  num_learning_epochs: 5
+  num_mini_batches: 4
+  learning_rate: 0.001
+  schedule: adaptive
+  gamma: 0.99
+  lam: 0.95
+  entropy_coef: 0.005
+  desired_kl: 0.01
+  max_grad_norm: 1.0
+  value_loss_coef: 1.0
+  use_clipped_value_loss: true
+  clip_param: 0.2
+  normalize_advantage_per_mini_batch: false
+  symmetry_cfg: null
+  rnd_cfg: null
+  reconstruction_loss_coef_sg: 0.5
+  reconstruction_loss_coef_sh: 0.1
+  reconstruction_loss_coef_sk: 0.1
+  alignment_loss_coef: 1.0
+  consistency_loss_coef: 5.0
+  finetune_human_encoder: false
+  finetune_robot_encoder: false
+  finetune_keypoints_encoder: false
+clip_actions: null
+save_interval: 500
+experiment_name: gaemimic_g1_flat
+run_name: ''
+logger: tensorboard
+neptune_project: isaaclab
+wandb_project: isaaclab
+resume: false
+load_run: .*
+load_checkpoint: model_.*.pt

@@ -1,0 +1,1364 @@
+--- git status ---
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   README.md
+	modified:   scripts/sim2sim.py
+	modified:   source/wbc_robot/wbc_robot/tasks/manager_based/wbc_robot/mdp/__init__.py
+	modified:   source/wbc_robot/wbc_robot/utils/exporter.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	scripts/motion2sim.py
+	scripts/rsl_rl/paly_one.py
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/README.md b/README.md
+index 556bffb..8fedfb9 100644
+--- a/README.md
++++ b/README.md
+@@ -70,6 +70,7 @@ python scripts/rsl_rl/train.py --task Template-MultiTracking-Flat-G1-v0 --headle
+ python scripts/rsl_rl/train.py --task Template-GAEMimic-Flat-G1-v0 --headless
+ # 恢复训练 (加载指定的历史 Checkpoint)
+ python scripts/rsl_rl/train.py --task Template-MultiTracking-Flat-G1-v0 --headless --resume --load_run 2026-05-16_20-58-44
++python scripts/rsl_rl/train.py --task Template-GAEMimic-Flat-G1-v0 --headless --resume --load_run 2026-05-21_12-27-17
+ # 播放与测试 (可视化渲染，设置录制 1000 帧)
+ # --load_run：指定要加载哪个日期/名称的训练文件夹。
+ # --checkpoint：指定加载该文件夹下的哪一个 .pt 权重文件
+@@ -168,3 +169,27 @@ cd unitree_rl_lab/deploy/robots/g1_29dof/build
+ # 4. Click the mujoco window, and then press 9 to disable the elastic band.
+ ```
+ 
++### Sim2Sim-py
++```bash
++# 打开 MuJoCo 窗口运行时，去掉 --headless --max_steps 12
++# 用 --policy_path 指定任意一个 ONNX，用 --motion_file 指定 .npz 或动作目录。目录模式会默认选择 dance1_subject1.npz
++python scripts/sim2sim.py \
++  --robot g1 \
++  --motion_file datasets/extend_datasets/lafan1_dataset/g1/train/ \
++  --policy_path /root/gpufree-data/lab_lecture/wbc_robot/logs/rsl_rl/gaemimic_g1_flat/2026-05-21_12-27-17/exported/robot_policy.onnx \
++  --headless \
++  --max_steps 12
++
++python scripts/sim2sim.py \
++  --robot g1 \
++  --motion_file datasets/extend_datasets/lafan1_dataset/g1/train/ \
++  --policy_path /root/gpufree-data/lab_lecture/wbc_robot/logs/rsl_rl/multi_g1_flat/2026-05-20_14-58-09/exported/policy.onnx
++```
++
++```bash
++# 默认是 kinematic 精确回放模式，也就是每一帧直接把 motionfile 的姿态写给 MuJoCo：--mode pd：用电机力矩跟踪关节目标，适合看物理跟踪效果
++python scripts/motion2sim.py \
++  --motion_file datasets/extend_datasets/lafan1_dataset/g1/train/dance1_subject1.npz
++
++python scripts/motion2sim.py --mode pd
++```
+\ No newline at end of file
+diff --git a/scripts/sim2sim.py b/scripts/sim2sim.py
+index 51d3c33..00400f5 100644
+--- a/scripts/sim2sim.py
++++ b/scripts/sim2sim.py
+@@ -1,41 +1,169 @@
+-"""Unified sim2sim script supporting multiple robot configurations.
+-
+-Usage Examples:
+-    # For HI robot:
+-    python sim2sim.py --robot hi --motion_file source/motion/hightorque/hi/npz/dance1_subject2.npz \
+-    --xml_path /path/to/hi.xml --policy_path /path/to/hi_policy.onnx --save_json
+-    
+-    # For PI Plus robot:
+-    python sim2sim.py --robot pi_plus --motion_file source/motion/hightorque/pi_plus/npz/dance1_subject2.npz \
+-    --xml_path /path/to/pi_plus.xml --policy_path /path/to/pi_plus_policy.onnx --save_json
++"""Unified sim-to-sim runner for motion-tracking policies in MuJoCo.
++
++The G1 path is set up for the exported policies in this repository:
++
++    python scripts/sim2sim.py --robot g1 --headless --max_steps 50
++    python scripts/sim2sim.py --robot g1 --motion_file datasets/extend_datasets/lafan1_dataset/g1/train/
++
++Both older single-input policies (``obs``) and GAEMimic robot policies with
++split ONNX inputs (``robot_command``, ``motion_anchor_ori_b``, ...) are
++supported.
+ """
+ 
++from __future__ import annotations
++
+ import argparse
+ import json
++import os
+ import time
++from pathlib import Path
+ 
+ import mujoco
+ import mujoco.viewer
+ import numpy as np
+ import onnx
+ import onnxruntime
+-import torch
+-import yaml
+-from scipy.spatial.transform import Rotation as R
+ 
+-# Simulation parameters
+-simulation_duration = 300.0
+-simulation_dt = 0.002
+-control_decimation = 10
++SIMULATION_DURATION = 300.0
++SIMULATION_DT = 0.002
++CONTROL_DECIMATION = 10
++
++DEFAULT_G1_POLICY_PATH = Path(
++    "/root/gpufree-data/lab_lecture/wbc_robot/logs/rsl_rl/multi_g1_flat/2026-05-20_14-58-09/exported/policy.onnx"
++)
++DEFAULT_G1_MOTION_PATH = Path("datasets/extend_datasets/lafan1_dataset/g1/train/")
++DEFAULT_G1_MOTION_NAME = "dance1_subject1.npz"
++DEFAULT_G1_XML_CANDIDATES = (
++    Path("/root/unitree_mujoco/unitree_robots/g1/scene_29dof.xml"),
++    Path("/root/unitree_mujoco/unitree_robots/g1/g1_29dof.xml"),
++    Path("unitree_model/G1/29dof/g1_29dof.xml"),
++)
++
++
++G1_JOINT_NAMES = [
++    "left_hip_pitch_joint",
++    "left_hip_roll_joint",
++    "left_hip_yaw_joint",
++    "left_knee_joint",
++    "left_ankle_pitch_joint",
++    "left_ankle_roll_joint",
++    "right_hip_pitch_joint",
++    "right_hip_roll_joint",
++    "right_hip_yaw_joint",
++    "right_knee_joint",
++    "right_ankle_pitch_joint",
++    "right_ankle_roll_joint",
++    "waist_yaw_joint",
++    "waist_roll_joint",
++    "waist_pitch_joint",
++    "left_shoulder_pitch_joint",
++    "left_shoulder_roll_joint",
++    "left_shoulder_yaw_joint",
++    "left_elbow_joint",
++    "left_wrist_roll_joint",
++    "left_wrist_pitch_joint",
++    "left_wrist_yaw_joint",
++    "right_shoulder_pitch_joint",
++    "right_shoulder_roll_joint",
++    "right_shoulder_yaw_joint",
++    "right_elbow_joint",
++    "right_wrist_roll_joint",
++    "right_wrist_pitch_joint",
++    "right_wrist_yaw_joint",
++]
++
++
++def _first_existing_path(paths: tuple[Path, ...]) -> Path:
++    for path in paths:
++        expanded = path.expanduser()
++        if expanded.exists():
++            return expanded
++    return paths[0]
++
++
++def _build_g1_arrays() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
++    armature_5020 = 0.003609725
++    armature_7520_14 = 0.010177520
++    armature_7520_22 = 0.025101925
++    armature_4010 = 0.00425
++    natural_freq = 10.0 * 2.0 * np.pi
++    damping_ratio = 2.0
++
++    stiffness_5020 = armature_5020 * natural_freq**2
++    stiffness_7520_14 = armature_7520_14 * natural_freq**2
++    stiffness_7520_22 = armature_7520_22 * natural_freq**2
++    stiffness_4010 = armature_4010 * natural_freq**2
++
++    damping_5020 = 2.0 * damping_ratio * armature_5020 * natural_freq
++    damping_7520_14 = 2.0 * damping_ratio * armature_7520_14 * natural_freq
++    damping_7520_22 = 2.0 * damping_ratio * armature_7520_22 * natural_freq
++    damping_4010 = 2.0 * damping_ratio * armature_4010 * natural_freq
++
++    default_pos = {name: 0.0 for name in G1_JOINT_NAMES}
++    stiffness = {}
++    damping = {}
++    effort = {}
++
++    for side in ("left", "right"):
++        default_pos[f"{side}_hip_pitch_joint"] = -0.312
++        default_pos[f"{side}_knee_joint"] = 0.669
++        default_pos[f"{side}_ankle_pitch_joint"] = -0.363
++        default_pos[f"{side}_shoulder_pitch_joint"] = 0.2
++        default_pos[f"{side}_elbow_joint"] = 0.6
++
++        for suffix in ("hip_pitch", "hip_yaw"):
++            name = f"{side}_{suffix}_joint"
++            stiffness[name] = stiffness_7520_14
++            damping[name] = damping_7520_14
++            effort[name] = 88.0
++        for suffix in ("hip_roll", "knee"):
++            name = f"{side}_{suffix}_joint"
++            stiffness[name] = stiffness_7520_22
++            damping[name] = damping_7520_22
++            effort[name] = 139.0
++        for suffix in ("ankle_pitch", "ankle_roll"):
++            name = f"{side}_{suffix}_joint"
++            stiffness[name] = 2.0 * stiffness_5020
++            damping[name] = 2.0 * damping_5020
++            effort[name] = 50.0
++        for suffix in ("shoulder_pitch", "shoulder_roll", "shoulder_yaw", "elbow", "wrist_roll"):
++            name = f"{side}_{suffix}_joint"
++            stiffness[name] = stiffness_5020
++            damping[name] = damping_5020
++            effort[name] = 25.0
++        for suffix in ("wrist_pitch", "wrist_yaw"):
++            name = f"{side}_{suffix}_joint"
++            stiffness[name] = stiffness_4010
++            damping[name] = damping_4010
++            effort[name] = 5.0
++
++    default_pos["left_shoulder_roll_joint"] = 0.2
++    default_pos["right_shoulder_roll_joint"] = -0.2
++
++    stiffness["waist_yaw_joint"] = stiffness_7520_14
++    damping["waist_yaw_joint"] = damping_7520_14
++    effort["waist_yaw_joint"] = 88.0
++    for name in ("waist_roll_joint", "waist_pitch_joint"):
++        stiffness[name] = 2.0 * stiffness_5020
++        damping[name] = 2.0 * damping_5020
++        effort[name] = 50.0
++
++    default_array = np.array([default_pos[name] for name in G1_JOINT_NAMES], dtype=np.float32)
++    stiffness_array = np.array([stiffness[name] for name in G1_JOINT_NAMES], dtype=np.float32)
++    damping_array = np.array([damping[name] for name in G1_JOINT_NAMES], dtype=np.float32)
++    action_scale = np.array([0.25 * effort[name] / stiffness[name] for name in G1_JOINT_NAMES], dtype=np.float32)
++    return default_array, stiffness_array, damping_array, action_scale
++
++
++G1_DEFAULT_JOINT_POS, G1_STIFFNESS, G1_DAMPING, G1_ACTION_SCALE = _build_g1_arrays()
++
+ 
+-# Robot configurations
+ ROBOT_CONFIGS = {
+-    
+     "hi": {
+         "num_actions": 23,
+         "num_obs": 124,
+         "reference_body": "base_link",
+-        "default_xml": None,  # Must be provided
++        "default_xml": None,
+         "joint_names": [
+             "l_hip_pitch_joint",
+             "l_hip_roll_joint",
+@@ -62,20 +190,12 @@ ROBOT_CONFIGS = {
+             "r_wrist_joint",
+         ],
+         "motion_body_index": 0,
+-        "observation_structure": {
+-            "command": 46,
+-            "motion_ref_ori_b": 6,
+-            "base_ang_vel": 3,
+-            "joint_pos": 23,
+-            "joint_vel": 23,
+-            "actions": 23
+-        }
+     },
+     "pi_plus": {
+         "num_actions": 22,
+         "num_obs": 119,
+         "reference_body": "base_link",
+-        "default_xml": None,  # Must be provided
++        "default_xml": None,
+         "joint_names": [
+             "l_hip_pitch_joint",
+             "l_hip_roll_joint",
+@@ -101,433 +221,664 @@ ROBOT_CONFIGS = {
+             "r_wrist_joint",
+         ],
+         "motion_body_index": 0,
+-        "observation_structure": {
+-            "command": 44,
+-            "motion_ref_ori_b": 6,
+-            "base_ang_vel": 3,
+-            "joint_pos": 22,
+-            "joint_vel": 22,
+-            "actions": 22
+-        }
+     },
+     "g1": {
+         "num_actions": 29,
+-        "num_obs": 154,  # command(58) + ori(6) + w(3) + qpos(29) + qvel(29) + action(29) = 154
++        "num_obs": 154,
+         "reference_body": "pelvis",
+-        "default_xml": None,  # Must be provided
+-        "joint_names": [
+-            "pelvis" ,
+-            "pelvis_contour_link",
+-            "left_hip_pitch_link" ,
+-            "left_hip_roll_link",
+-            "left_hip_yaw_link",
+-            "left_knee_link",
+-            "left_ankle_pitch_link" ,
+-            "left_ankle_roll_link" ,
+-            "right_hip_pitch_link" ,
+-            "right_hip_roll_link",
+-            "right_hip_yaw_link" ,
+-            "right_knee_link" ,
+-            "right_ankle_pitch_link", 
+-            "right_ankle_roll_link" ,
+-            "waist_yaw_link",
+-            "waist_roll_link", 
+-            "torso_link",
+-            "logo_link" ,
+-            "head_link" ,
+-            "waist_support_link",
+-            "left_shoulder_pitch_link", 
+-            "left_shoulder_roll_link" ,
+-            "left_shoulder_yaw_link",
+-            "left_elbow_link" ,
+-            "left_wrist_roll_link", 
+-            "left_wrist_pitch_link" ,
+-            "left_wrist_yaw_link",
+-            "left_rubber_hand" ,
+-            "right_shoulder_pitch_link", 
+-            "right_shoulder_roll_link" ,
+-            "right_shoulder_yaw_link" ,
+-            "right_elbow_link" ,
+-            "right_wrist_roll_link", 
+-            "right_wrist_pitch_link", 
+-            "right_wrist_yaw_link",
+-            "right_rubber_hand",
+-        ],    # Dynamically extracted from XML
++        "default_xml": str(_first_existing_path(DEFAULT_G1_XML_CANDIDATES)),
++        "joint_names": G1_JOINT_NAMES,
++        "default_joint_pos": G1_DEFAULT_JOINT_POS,
++        "joint_stiffness": G1_STIFFNESS,
++        "joint_damping": G1_DAMPING,
++        "action_scale": G1_ACTION_SCALE,
++        "base_height": 0.76,
+         "motion_body_index": 0,
+-        "observation_structure": {
+-            "command": 58,
+-            "motion_ref_ori_b": 6,
+-            "base_ang_vel": 3,
+-            "joint_pos": 29,
+-            "joint_vel": 29,
+-            "actions": 29
+-        }
+-    }
++    },
+ }
+ 
+ 
+-def matrix_from_quat(quaternions: torch.Tensor) -> torch.Tensor:
+-    """Convert rotations given as quaternions to rotation matrices."""
+-    r, i, j, k = torch.unbind(quaternions, -1)
+-    two_s = 2.0 / (quaternions * quaternions).sum(-1)
+-
+-    o = torch.stack(
+-        (
+-            1 - two_s * (j * j + k * k),
+-            two_s * (i * j - k * r),
+-            two_s * (i * k + j * r),
+-            two_s * (i * j + k * r),
+-            1 - two_s * (i * i + k * k),
+-            two_s * (j * k - i * r),
+-            two_s * (i * k - j * r),
+-            two_s * (j * k + i * r),
+-            1 - two_s * (i * i + j * j),
+-        ),
+-        -1,
++def matrix_from_quat_np(quat: np.ndarray) -> np.ndarray:
++    """Convert a wxyz quaternion to a 3x3 rotation matrix."""
++    q = np.asarray(quat, dtype=np.float64)
++    q = q / np.linalg.norm(q)
++    w, x, y, z = q
++    two_s = 2.0 / np.dot(q, q)
++    return np.array(
++        [
++            [1 - two_s * (y * y + z * z), two_s * (x * y - z * w), two_s * (x * z + y * w)],
++            [two_s * (x * y + z * w), 1 - two_s * (x * x + z * z), two_s * (y * z - x * w)],
++            [two_s * (x * z - y * w), two_s * (y * z + x * w), 1 - two_s * (x * x + y * y)],
++        ],
++        dtype=np.float64,
+     )
+-    return o.reshape(quaternions.shape[:-1] + (3, 3))
+ 
+ 
+-def get_obs(data):
+-    """Extracts an observation from the mujoco data structure"""
+-    qpos = data.qpos.astype(np.double)
+-    dq = data.qvel.astype(np.double)
+-    quat = data.sensor("orientation").data[[0, 1, 2, 3]].astype(np.double)
+-    
+-    r = R.from_quat(quat)
+-    v = r.apply(data.qvel[:3], inverse=True).astype(np.double)
+-    omega = data.sensor("angular-velocity").data.astype(np.double)
+-    gvec = r.apply(np.array([0.0, 0.0, -1.0]), inverse=True).astype(np.double)
+-    state_tau = data.qfrc_actuator.astype(np.double) - data.qfrc_bias.astype(np.double)
++def quat_conjugate_np(q: np.ndarray) -> np.ndarray:
++    q = np.asarray(q, dtype=np.float64)
++    return np.array([q[0], -q[1], -q[2], -q[3]], dtype=np.float64)
++
++
++def quat_mul_np(q1: np.ndarray, q2: np.ndarray) -> np.ndarray:
++    w1, x1, y1, z1 = np.asarray(q1, dtype=np.float64)
++    w2, x2, y2, z2 = np.asarray(q2, dtype=np.float64)
++    return np.array(
++        [
++            w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
++            w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
++            w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
++            w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
++        ],
++        dtype=np.float64,
++    )
++
+ 
+-    return (qpos, dq, quat, v, omega, gvec, state_tau)
++def quat_inv_np(q: np.ndarray, eps: float = 1e-9) -> np.ndarray:
++    q = np.asarray(q, dtype=np.float64)
++    return quat_conjugate_np(q) / max(float(np.dot(q, q)), eps)
+ 
+ 
+ def quat_rotate_inverse_np(q: np.ndarray, v: np.ndarray) -> np.ndarray:
+-    """Rotate a vector by the inverse of a quaternion along the last dimension of q and v (NumPy version)."""
+-    q_w = q[..., 0]
+-    q_vec = q[..., 1:]
+-    
+-    a = v * np.expand_dims(2.0 * q_w**2 - 1.0, axis=-1)
+-    b = np.cross(q_vec, v, axis=-1) * np.expand_dims(q_w, axis=-1) * 2.0
+-    
+-    if q_vec.ndim == 2:
+-        dot_product = np.sum(q_vec * v, axis=-1, keepdims=True)
+-        c = q_vec * dot_product * 2.0
+-    else:
+-        dot_product = np.expand_dims(np.einsum('...i,...i->...', q_vec, v), axis=-1)
+-        c = q_vec * dot_product * 2.0
+-    
+-    return a - b + c
+-
+-
+-def subtract_frame_transforms_mujoco(pos_a, quat_a, pos_b, quat_b):
+-    """Calculate relative transformation from frame A to frame B (MuJoCo version)."""
+-    rotm_a = np.zeros(9)
+-    mujoco.mju_quat2Mat(rotm_a, quat_a)
+-    rotm_a = rotm_a.reshape(3, 3)
+-    
+-    rel_pos = rotm_a.T @ (pos_b - pos_a)
+-    rel_quat = quaternion_multiply(quaternion_conjugate(quat_a), quat_b)
+-    rel_quat = rel_quat / np.linalg.norm(rel_quat)
+-    
+-    return rel_pos, rel_quat
++    """Rotate vector v by inverse quaternion q, both using MuJoCo/Isaac wxyz convention."""
++    rot = matrix_from_quat_np(q)
++    return rot.T @ np.asarray(v, dtype=np.float64)
+ 
+ 
+-def quaternion_conjugate(q):
+-    """Quaternion conjugate: [w, x, y, z] -> [w, -x, -y, -z]"""
+-    return np.array([q[0], -q[1], -q[2], -q[3]])
++def pd_control(target_q, q, kp, target_dq, dq, kd):
++    return (target_q - q) * kp + (target_dq - dq) * kd
+ 
+ 
+-def quaternion_multiply(q1, q2):
+-    """Quaternion multiplication: q1 ⊗ q2"""
+-    w1, x1, y1, z1 = q1
+-    w2, x2, y2, z2 = q2
+-    
+-    w = w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2
+-    x = w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2
+-    y = w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2
+-    z = w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
+-    
+-    return np.array([w, x, y, z])
++def _parse_float_csv(value: str | None) -> np.ndarray | None:
++    if not value:
++        return None
++    return np.array([float(x.strip()) for x in value.split(",") if x.strip()], dtype=np.float32)
++
++
++def _parse_str_csv(value: str | None) -> list[str] | None:
++    if not value:
++        return None
++    return [x.strip() for x in value.split(",") if x.strip()]
++
++
++def _resolve_motion_file(path: str | Path, preferred_name: str = DEFAULT_G1_MOTION_NAME) -> Path:
++    motion_path = Path(path).expanduser()
++    if motion_path.is_dir():
++        preferred = motion_path / preferred_name
++        if preferred.exists():
++            print(f"[INFO]: Motion directory provided; using {preferred}")
++            return preferred
++        npz_files = sorted(motion_path.glob("*.npz"))
++        if not npz_files:
++            raise FileNotFoundError(f"No .npz motion files found in directory: {motion_path}")
++        print(f"[INFO]: Motion directory provided; using first file {npz_files[0]}")
++        return npz_files[0]
++    if motion_path.suffix != ".npz":
++        with_suffix = motion_path.with_suffix(".npz")
++        if with_suffix.exists():
++            return with_suffix
++    if not motion_path.exists():
++        raise FileNotFoundError(f"Motion file does not exist: {motion_path}")
++    return motion_path
++
++
++def _resolve_policy_path(path: str | Path) -> Path:
++    policy_path = Path(path).expanduser()
++    if policy_path.is_dir():
++        policy_path = policy_path / "policy.onnx"
++    if not policy_path.exists():
++        raise FileNotFoundError(f"ONNX policy does not exist: {policy_path}")
++    return policy_path
++
++
++def _load_mujoco_model(xml_path: str | Path) -> mujoco.MjModel:
++    xml = Path(xml_path).expanduser()
++    if not xml.exists():
++        raise FileNotFoundError(f"MuJoCo XML does not exist: {xml}")
++    cwd = os.getcwd()
++    try:
++        os.chdir(xml.parent)
++        model = mujoco.MjModel.from_xml_path(xml.name)
++    except Exception as exc:
++        msg = (
++            f"Failed to load MuJoCo XML: {xml}\n"
++            "If this is the repository copy under unitree_model/G1/29dof, the STL meshes may be missing. "
++            "Use /root/unitree_mujoco/unitree_robots/g1/scene_29dof.xml or install the Unitree mesh folder."
++        )
++        raise RuntimeError(msg) from exc
++    finally:
++        os.chdir(cwd)
++    return model
++
++
++def _metadata_dict(model: onnx.ModelProto) -> dict[str, str]:
++    return {prop.key: prop.value for prop in model.metadata_props}
++
++
++def _policy_metadata_or_config(
++    model: onnx.ModelProto, config: dict
++) -> tuple[list[str], np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
++    metadata = _metadata_dict(model)
++    joint_names = _parse_str_csv(metadata.get("joint_names")) or list(config.get("joint_names", []))
++    default_pos = _parse_float_csv(metadata.get("default_joint_pos"))
++    stiffness = _parse_float_csv(metadata.get("joint_stiffness"))
++    damping = _parse_float_csv(metadata.get("joint_damping"))
++    action_scale = _parse_float_csv(metadata.get("action_scale"))
++
++    default_pos = default_pos if default_pos is not None else config.get("default_joint_pos")
++    stiffness = stiffness if stiffness is not None else config.get("joint_stiffness")
++    damping = damping if damping is not None else config.get("joint_damping")
++    action_scale = action_scale if action_scale is not None else config.get("action_scale")
++
++    missing = [
++        name
++        for name, value in (
++            ("joint_names", joint_names),
++            ("default_joint_pos", default_pos),
++            ("joint_stiffness", stiffness),
++            ("joint_damping", damping),
++            ("action_scale", action_scale),
++        )
++        if value is None or len(value) == 0
++    ]
++    if missing:
++        raise RuntimeError("Policy metadata is missing and no local fallback is available for: " + ", ".join(missing))
+ 
++    num_actions = config["num_actions"]
++    arrays = [np.asarray(default_pos), np.asarray(stiffness), np.asarray(damping), np.asarray(action_scale)]
++    if len(joint_names) != num_actions or any(len(arr) != num_actions for arr in arrays):
++        raise ValueError(
++            f"Expected {num_actions} policy joints/arrays, got "
++            f"joint_names={len(joint_names)}, default={len(arrays[0])}, stiffness={len(arrays[1])}, "
++            f"damping={len(arrays[2])}, action_scale={len(arrays[3])}"
++        )
++
++    return (
++        joint_names,
++        arrays[0].astype(np.float32),
++        arrays[1].astype(np.float32),
++        arrays[2].astype(np.float32),
++        arrays[3].astype(np.float32),
++    )
+ 
+-def quat_mul_np(q1: np.ndarray, q2: np.ndarray) -> np.ndarray:
+-    """Multiply two quaternions together."""
+-    if q1.shape != q2.shape:
+-        msg = f"Expected input quaternion shape mismatch: {q1.shape} != {q2.shape}."
+-        raise ValueError(msg)
+-    
+-    shape = q1.shape
+-    q1 = q1.reshape(-1, 4)
+-    q2 = q2.reshape(-1, 4)
+-    
+-    w1, x1, y1, z1 = q1[:, 0], q1[:, 1], q1[:, 2], q1[:, 3]
+-    w2, x2, y2, z2 = q2[:, 0], q2[:, 1], q2[:, 2], q2[:, 3]
+-    
+-    ww = (z1 + x1) * (x2 + y2)
+-    yy = (w1 - y1) * (w2 + z2)
+-    zz = (w1 + y1) * (w2 - z2)
+-    xx = ww + yy + zz
+-    qq = 0.5 * (xx + (z1 - x1) * (x2 - y2))
+-    w = qq - ww + (z1 - y1) * (y2 - z2)
+-    x = qq - xx + (x1 + w1) * (x2 + w2)
+-    y = qq - yy + (w1 - x1) * (y2 + z2)
+-    z = qq - zz + (z1 + y1) * (w2 - x2)
+-
+-    return np.stack([w, x, y, z], axis=-1).reshape(shape)
+ 
++def _actuator_joint_names(model: mujoco.MjModel) -> list[str]:
++    names = []
++    for actuator_id in range(model.nu):
++        joint_id = int(model.actuator_trnid[actuator_id][0])
++        name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
++        if name is not None:
++            names.append(name)
++    return names
+ 
+-def quat_conjugate_np(q: np.ndarray) -> np.ndarray:
+-    """Computes the conjugate of a quaternion."""
+-    shape = q.shape
+-    q = q.reshape(-1, 4)
+-    return np.concatenate((q[..., 0:1], -q[..., 1:]), axis=-1).reshape(shape)
+ 
++def _reorder(values: np.ndarray, source_names: list[str], target_names: list[str], label: str) -> np.ndarray:
++    index = {name: i for i, name in enumerate(source_names)}
++    missing = [name for name in target_names if name not in index]
++    if missing:
++        raise ValueError(f"Cannot remap {label}; missing names: {missing}")
++    return np.asarray([values[index[name]] for name in target_names], dtype=np.float32)
+ 
+-def quat_inv_np(q: np.ndarray, eps: float = 1e-9) -> np.ndarray:
+-    """Computes the inverse of a quaternion."""
+-    return quat_conjugate_np(q) / np.clip(np.sum(q**2, axis=-1, keepdims=True), a_min=eps, a_max=None)
+ 
++def _joint_positions(data: mujoco.MjData, model: mujoco.MjModel, joint_names: list[str]) -> np.ndarray:
++    values = []
++    for name in joint_names:
++        joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
++        values.append(data.qpos[model.jnt_qposadr[joint_id]])
++    return np.asarray(values, dtype=np.float32)
++
++
++def _joint_velocities(data: mujoco.MjData, model: mujoco.MjModel, joint_names: list[str]) -> np.ndarray:
++    values = []
++    for name in joint_names:
++        joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
++        values.append(data.qvel[model.jnt_dofadr[joint_id]])
++    return np.asarray(values, dtype=np.float32)
++
++
++def _write_joint_positions(
++    data: mujoco.MjData, model: mujoco.MjModel, joint_names: list[str], values: np.ndarray
++) -> None:
++    for name, value in zip(joint_names, values):
++        joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
++        data.qpos[model.jnt_qposadr[joint_id]] = value
++
++
++def _write_joint_velocities(
++    data: mujoco.MjData, model: mujoco.MjModel, joint_names: list[str], values: np.ndarray
++) -> None:
++    for name, value in zip(joint_names, values):
++        joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
++        data.qvel[model.jnt_dofadr[joint_id]] = value
++
++
++def _sensor_data(model: mujoco.MjModel, data: mujoco.MjData, names: tuple[str, ...]) -> np.ndarray | None:
++    for name in names:
++        sensor_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SENSOR, name)
++        if sensor_id != -1:
++            return np.asarray(data.sensor(name).data, dtype=np.float64).copy()
++    return None
++
++
++def _robot_orientation_and_gyro(
++    model: mujoco.MjModel, data: mujoco.MjData, reference_body_id: int
++) -> tuple[np.ndarray, np.ndarray]:
++    quat = _sensor_data(model, data, ("imu_quat", "orientation", "secondary_imu_quat"))
++    if quat is None or quat.shape[0] != 4:
++        quat = np.asarray(data.xquat[reference_body_id], dtype=np.float64).copy()
++    quat = quat / np.linalg.norm(quat)
++
++    omega = _sensor_data(model, data, ("imu_gyro", "angular-velocity", "secondary_imu_gyro"))
++    if omega is None or omega.shape[0] != 3:
++        omega = quat_rotate_inverse_np(quat, data.qvel[3:6])
++    return quat.astype(np.float32), omega.astype(np.float32)
++
++
++def _frame_idx(timestep: int, num_frames: int, loop: bool) -> int:
++    if num_frames <= 0:
++        raise ValueError("Motion file has no frames.")
++    if loop:
++        return timestep % num_frames
++    return min(timestep, num_frames - 1)
++
++
++def _future_indices(timestep: int, num_frames: int, loop: bool, frames: int = 10, interval: int = 2) -> np.ndarray:
++    return np.array([_frame_idx(timestep + interval * i, num_frames, loop) for i in range(frames)], dtype=np.int64)
+ 
+-def pd_control(target_q, q, kp, target_dq, dq, kd):
+-    """Calculates torques from position commands"""
+-    return (target_q - q) * kp + (target_dq - dq) * kd
+ 
+-def create_observation_hi_pi(obs, offset, motioninput, motion_ref_ori_b, omega, qpos_seq, qvel_seq, action_buffer, joint_pos_array_seq, num_actions):
+-    """Create observation for HI and PI Plus robots."""
+-    cmd_size = len(motioninput)
+-    obs[offset:offset + cmd_size] = motioninput
+-    offset += cmd_size
+-    obs[offset:offset + 6] = motion_ref_ori_b
+-    offset += 6
+-    obs[offset:offset + 3] = omega
+-    offset += 3
+-    obs[offset:offset + num_actions] = qpos_seq - joint_pos_array_seq
+-    offset += num_actions
+-    obs[offset:offset + num_actions] = qvel_seq
+-    offset += num_actions   
+-    obs[offset:offset + num_actions] = action_buffer
+-    return obs
+-
+-
+-def run_simulation(robot_type: str, motion_file: str, xml_path: str, policy_path: str, save_json: bool = False, loop: bool = False):
+-    """Run the sim2sim simulation."""
++def _motion_reference_ori_b(robot_quat_w: np.ndarray, motion_quat_w: np.ndarray) -> np.ndarray:
++    rel_quat = quat_mul_np(quat_inv_np(robot_quat_w), motion_quat_w)
++    rel_quat = rel_quat / np.linalg.norm(rel_quat)
++    mat = matrix_from_quat_np(rel_quat)
++    return mat[:, :2].reshape(-1).astype(np.float32)
++
++
++def _command_obs(motion: np.lib.npyio.NpzFile, idx: int) -> np.ndarray:
++    return np.concatenate((motion["joint_pos"][idx], motion["joint_vel"][idx]), axis=0).astype(np.float32)
++
++
++def _robot_command(motion: np.lib.npyio.NpzFile, indices: np.ndarray) -> np.ndarray:
++    return motion["joint_pos"][indices].reshape(-1).astype(np.float32)
++
++
++def _human_command(motion: np.lib.npyio.NpzFile, indices: np.ndarray) -> np.ndarray:
++    if "smplx_pose_body" not in motion:
++        raise KeyError("ONNX expects human_command, but the motion file has no smplx_pose_body key.")
++    return motion["smplx_pose_body"][indices].reshape(-1).astype(np.float32)
++
++
++def _keypoints_command(motion: np.lib.npyio.NpzFile, indices: np.ndarray) -> np.ndarray:
++    if "robot_keypoints_trans" not in motion or "robot_keypoints_rot" not in motion:
++        raise KeyError("ONNX expects keypoints_command, but the motion file has no robot_keypoints_* keys.")
++    keypoints = np.concatenate(
++        (motion["robot_keypoints_trans"][indices], motion["robot_keypoints_rot"][indices]), axis=-1
++    )
++    return keypoints.reshape(-1).astype(np.float32)
++
++
++def _as_onnx_input(name: str, value: np.ndarray, expected_dim: int | None = None) -> np.ndarray:
++    arr = np.asarray(value, dtype=np.float32).reshape(1, -1)
++    if expected_dim is not None and expected_dim > 0 and arr.shape[1] != expected_dim:
++        raise ValueError(f"ONNX input {name!r} expected dim {expected_dim}, got {arr.shape[1]}")
++    return arr
++
++
++def _onnx_input_dim(input_info) -> int | None:
++    shape = input_info.shape
++    if len(shape) < 2:
++        return None
++    dim = shape[1]
++    return int(dim) if isinstance(dim, int) else None
++
++
++def _build_policy_feed(
++    input_infos,
++    motion: np.lib.npyio.NpzFile,
++    timestep: int,
++    loop: bool,
++    num_frames: int,
++    robot_quat_w: np.ndarray,
++    motion_quat_w: np.ndarray,
++    omega: np.ndarray,
++    joint_pos_train: np.ndarray,
++    joint_vel_train: np.ndarray,
++    default_joint_pos_train: np.ndarray,
++    action_buffer_train: np.ndarray,
++) -> dict[str, np.ndarray]:
++    idx = _frame_idx(timestep, num_frames, loop)
++    future = _future_indices(timestep, num_frames, loop)
++    motion_ref_ori_b = _motion_reference_ori_b(robot_quat_w, motion_quat_w)
++    joint_pos_rel = (joint_pos_train - default_joint_pos_train).astype(np.float32)
++
++    pieces = {
++        "command": _command_obs(motion, idx),
++        "robot_command": _robot_command(motion, future),
++        "human_command": lambda: _human_command(motion, future),
++        "keypoints_command": lambda: _keypoints_command(motion, future),
++        "motion_anchor_ori_b": motion_ref_ori_b,
++        "base_ang_vel": omega.astype(np.float32),
++        "joint_pos": joint_pos_rel,
++        "joint_vel": joint_vel_train.astype(np.float32),
++        "actions": action_buffer_train.astype(np.float32),
++        "time_step": np.array([[idx]], dtype=np.float32),
++    }
++
++    feed = {}
++    for input_info in input_infos:
++        name = input_info.name
++        dim = _onnx_input_dim(input_info)
++        base_name = name.split(".")[0]
++
++        if name == "obs":
++            obs = np.concatenate(
++                (
++                    pieces["command"],
++                    pieces["motion_anchor_ori_b"],
++                    pieces["base_ang_vel"],
++                    pieces["joint_pos"],
++                    pieces["joint_vel"],
++                    pieces["actions"],
++                ),
++                axis=0,
++            )
++            feed[name] = _as_onnx_input(name, obs, dim)
++        elif name == "time_step":
++            feed[name] = pieces["time_step"]
++        elif base_name in pieces:
++            value = pieces[base_name]
++            if callable(value):
++                value = value()
++            feed[name] = _as_onnx_input(name, value, dim)
++        else:
++            raise ValueError(f"Unsupported ONNX input {name!r}. Inputs: {[i.name for i in input_infos]}")
++
++    return feed
++
++
++def _initialize_from_motion(
++    data: mujoco.MjData,
++    model: mujoco.MjModel,
++    motion: np.lib.npyio.NpzFile,
++    motion_body_idx: int,
++    policy_joint_names: list[str],
++    actuator_joint_names: list[str],
++    default_joint_pos_train: np.ndarray,
++    init_from_motion: bool,
++    base_height: float,
++) -> None:
++    if init_from_motion:
++        data.qpos[:3] = motion["body_pos_w"][0, motion_body_idx]
++        data.qpos[3:7] = motion["body_quat_w"][0, motion_body_idx]
++        joint_pos_actuator = _reorder(
++            motion["joint_pos"][0], policy_joint_names, actuator_joint_names, "initial joint pos"
++        )
++        _write_joint_positions(data, model, actuator_joint_names, joint_pos_actuator)
++        if "body_lin_vel_w" in motion:
++            data.qvel[:3] = motion["body_lin_vel_w"][0, motion_body_idx]
++        if "body_ang_vel_w" in motion:
++            data.qvel[3:6] = motion["body_ang_vel_w"][0, motion_body_idx]
++        joint_vel_actuator = _reorder(
++            motion["joint_vel"][0], policy_joint_names, actuator_joint_names, "initial joint vel"
++        )
++        _write_joint_velocities(data, model, actuator_joint_names, joint_vel_actuator)
++    else:
++        data.qpos[2] = base_height
++        data.qpos[3] = 1.0
++        default_actuator = _reorder(
++            default_joint_pos_train, policy_joint_names, actuator_joint_names, "default joint pos"
++        )
++        _write_joint_positions(data, model, actuator_joint_names, default_actuator)
++    mujoco.mj_forward(model, data)
++
++
++def _save_motion_json(motion: np.lib.npyio.NpzFile, motion_file: Path) -> None:
++    motion_dict = {
++        "body_pos_w": motion["body_pos_w"].tolist(),
++        "body_quat_w": motion["body_quat_w"].tolist(),
++        "joint_pos": motion["joint_pos"].tolist(),
++        "joint_vel": motion["joint_vel"].tolist(),
++    }
++    json_filename = motion_file.with_suffix(".json")
++    with json_filename.open("w") as f:
++        json.dump(motion_dict, f, indent=2)
++    print(f"[INFO]: Motion data saved to: {json_filename}")
++
++
++def run_simulation(
++    robot_type: str,
++    motion_file: str | Path,
++    xml_path: str | Path,
++    policy_path: str | Path,
++    save_json: bool = False,
++    loop: bool = False,
++    headless: bool = False,
++    duration: float = SIMULATION_DURATION,
++    dt: float = SIMULATION_DT,
++    decimation: int = CONTROL_DECIMATION,
++    max_steps: int | None = None,
++    init_from_motion: bool = True,
++) -> None:
+     config = ROBOT_CONFIGS[robot_type]
+-    print(f"[INFO]: Using robot configuration: {robot_type}")
+-    print(f"[INFO]: Actions: {config['num_actions']}, Observations: {config['num_obs']}")
+-    
+-    # Load motion data
++    motion_file = _resolve_motion_file(motion_file)
++    policy_path = _resolve_policy_path(policy_path)
++
++    print(f"[INFO]: Robot: {robot_type}")
++    print(f"[INFO]: Motion file: {motion_file}")
++    print(f"[INFO]: XML path: {xml_path}")
++    print(f"[INFO]: Policy path: {policy_path}")
++
+     motion = np.load(motion_file)
+-    motionpos = motion["body_pos_w"]
+-    motionquat = motion["body_quat_w"]
+-    motioninputpos = motion["joint_pos"]
+-    motioninputvel = motion["joint_vel"]
+-    # number of frames available across all sequences
+-    num_frames = min(motioninputpos.shape[0], motioninputvel.shape[0], motionpos.shape[0], motionquat.shape[0])
+-    # safe index helper (supports looping)
+-    def frame_idx(t):
+-        if loop and num_frames > 0:
+-            return t % num_frames
+-        return t if t < num_frames else num_frames - 1
+-    
+-    # Save motion data to JSON if requested
++    required_motion_keys = ("joint_pos", "joint_vel", "body_pos_w", "body_quat_w")
++    missing_motion_keys = [key for key in required_motion_keys if key not in motion]
++    if missing_motion_keys:
++        raise KeyError(f"Motion file is missing keys: {missing_motion_keys}")
++
++    num_frames = min(
++        motion["joint_pos"].shape[0],
++        motion["joint_vel"].shape[0],
++        motion["body_pos_w"].shape[0],
++        motion["body_quat_w"].shape[0],
++    )
+     if save_json:
+-        motion_dict = {
+-            "body_pos_w": motionpos.tolist(),
+-            "body_quat_w": motionquat.tolist(),
+-            "joint_pos": motioninputpos.tolist(),
+-            "joint_vel": motioninputvel.tolist()
+-        }
+-        # Convert npz path to json path: npz/file.npz -> json/file.json
+-        import os
+-        motion_dir = os.path.dirname(motion_file)
+-        motion_basename = os.path.basename(motion_file)
+-        
+-        # Replace 'npz' directory with 'json' directory
+-        if motion_dir.endswith('/npz') or motion_dir.endswith('\\npz'):
+-            json_dir = motion_dir[:-3] + 'json'  # Replace last 3 characters 'npz' with 'json'
+-        else:
+-            json_dir = motion_dir  # If not in npz directory, use same directory
+-            
+-        # Create json directory if it doesn't exist
+-        os.makedirs(json_dir, exist_ok=True)
+-        
+-        # Create json filename
+-        json_basename = motion_basename.replace('.npz', '.json')
+-        json_filename = os.path.join(json_dir, json_basename)
+-        with open(json_filename, 'w') as f:
+-            json.dump(motion_dict, f, indent=2)
+-        print(f"[INFO]: Motion data saved to: {json_filename}")
+-    
+-    # Load ONNX model and extract metadata
+-    model = onnx.load(policy_path)
+-    joint_seq = None
+-    joint_pos_array_seq = None
+-    stiffness_array_seq = None
+-    damping_array_seq = None
+-    action_scale = None
+-    
+-    for prop in model.metadata_props:
+-        if prop.key == "joint_names":
+-            joint_seq = prop.value.split(",")
+-        elif prop.key == "default_joint_pos":   
+-            joint_pos_array_seq = np.array([float(x) for x in prop.value.split(",")])
+-        elif prop.key == "joint_stiffness":
+-            stiffness_array_seq = np.array([float(x) for x in prop.value.split(",")])
+-        elif prop.key == "joint_damping":
+-            damping_array_seq = np.array([float(x) for x in prop.value.split(",")])
+-        elif prop.key == "action_scale":
+-            action_scale = np.array([float(x) for x in prop.value.split(",")])
+-        print(f"{prop.key}: {prop.value}")
+-    
+-    # Load robot model early for dynamic joint name extraction
+-    m = mujoco.MjModel.from_xml_path(xml_path)
+-    d = mujoco.MjData(m)
+-    m.opt.timestep = simulation_dt
+-
+-    # Remap to XML joint order
+-    if not config.get("joint_names"):
+-        # Dynamically extract actuated joints from MuJoCo model
+-        joint_xml = [mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_JOINT, i) 
+-                     for i in range(m.njnt) 
+-                     if m.jnt_type[i] != mujoco.mjtJoint.mjJNT_FREE]
+-        config["joint_names"] = joint_xml
+-        print(f"[INFO]: Dynamically loaded {len(joint_xml)} joint names from XML.")
+-    
+-    joint_xml = config["joint_names"]
+-    joint_pos_array = np.array([joint_pos_array_seq[joint_seq.index(joint)] for joint in joint_xml])
+-    stiffness_array = np.array([stiffness_array_seq[joint_seq.index(joint)] for joint in joint_xml])
+-    damping_array = np.array([damping_array_seq[joint_seq.index(joint)] for joint in joint_xml])
+-    
+-    print("stiffness_array", stiffness_array)
+-    print("damping_array", damping_array)
+-    print("action_scale", action_scale)
+-    
+-    # Initialize variables
+-    num_actions = config["num_actions"]
+-    num_obs = config["num_obs"]
+-    action = np.zeros(num_actions, dtype=np.float32)
+-    obs = np.zeros(num_obs, dtype=np.float32)
+-    counter = 0
+-    
+-    # Load policy
+-    policy = onnxruntime.InferenceSession(policy_path)
+-    
+-    action_buffer = np.zeros((num_actions,), dtype=np.float32)
+-    timestep = 0 
+-    motioninput = np.concatenate((motioninputpos[frame_idx(timestep), :], motioninputvel[frame_idx(timestep), :]), axis=0)
+-    
+-    motion_body_idx = config["motion_body_index"]
+-    motionposcurrent = motionpos[frame_idx(timestep), motion_body_idx, :]
+-    motionquatcurrent = motionquat[frame_idx(timestep), motion_body_idx, :]
+-    
+-    target_dof_pos = joint_pos_array.copy()
+-    if robot_type == "hi":
+-        d.qpos[2] = 0.68
+-    elif robot_type == "g1":
+-        d.qpos[2] = 0.76
+-    
+-    # Set reference body
+-    body_name = config["reference_body"]
+-    body_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, body_name)
++        _save_motion_json(motion, motion_file)
++
++    onnx_model = onnx.load(policy_path)
++    policy_joint_names, default_joint_pos, stiffness, damping, action_scale = _policy_metadata_or_config(
++        onnx_model, config
++    )
++
++    model = _load_mujoco_model(xml_path)
++    data = mujoco.MjData(model)
++    model.opt.timestep = dt
++
++    actuator_joint_names = _actuator_joint_names(model)
++    if len(actuator_joint_names) != config["num_actions"]:
++        raise ValueError(
++            f"Expected {config['num_actions']} actuated joints, got {len(actuator_joint_names)}: {actuator_joint_names}"
++        )
++
++    default_joint_pos_actuator = _reorder(
++        default_joint_pos, policy_joint_names, actuator_joint_names, "default joint pos"
++    )
++    stiffness_actuator = _reorder(stiffness, policy_joint_names, actuator_joint_names, "joint stiffness")
++    damping_actuator = _reorder(damping, policy_joint_names, actuator_joint_names, "joint damping")
++
++    body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, config["reference_body"])
+     if body_id == -1:
+-        raise ValueError(f"Body {body_name} not found in model")
++        raise ValueError(f"Body {config['reference_body']} not found in MuJoCo model.")
++
++    session = onnxruntime.InferenceSession(str(policy_path), providers=["CPUExecutionProvider"])
++    input_infos = session.get_inputs()
++    output_name = session.get_outputs()[0].name
++    print(f"[INFO]: ONNX inputs: {[(i.name, i.shape) for i in input_infos]}")
++    print(f"[INFO]: ONNX output: {output_name}")
++    print(f"[INFO]: Policy joint order: {policy_joint_names}")
++    print(f"[INFO]: MuJoCo actuator joint order: {actuator_joint_names}")
++
++    _initialize_from_motion(
++        data,
++        model,
++        motion,
++        config["motion_body_index"],
++        policy_joint_names,
++        actuator_joint_names,
++        default_joint_pos,
++        init_from_motion,
++        config.get("base_height", 0.75),
++    )
+ 
+-    with mujoco.viewer.launch_passive(m, d) as viewer:
++    num_actions = config["num_actions"]
++    action_buffer = np.zeros((num_actions,), dtype=np.float32)
++    target_dof_pos_actuator = default_joint_pos_actuator.copy()
++    timestep = 0
++    counter = 0
++    total_steps = max_steps if max_steps is not None else int(duration / dt)
++
++    def step_once() -> None:
++        nonlocal action_buffer, target_dof_pos_actuator, timestep, counter
++
++        qpos_actuator = _joint_positions(data, model, actuator_joint_names)
++        qvel_actuator = _joint_velocities(data, model, actuator_joint_names)
++        tau = pd_control(
++            target_dof_pos_actuator,
++            qpos_actuator,
++            stiffness_actuator,
++            np.zeros_like(damping_actuator),
++            qvel_actuator,
++            damping_actuator,
++        )
++        if model.actuator_ctrllimited.any():
++            tau = np.clip(tau, model.actuator_ctrlrange[:, 0], model.actuator_ctrlrange[:, 1])
++        data.ctrl[:] = tau
++        mujoco.mj_step(model, data)
++        counter += 1
++
++        if counter % decimation != 0:
++            return
++
++        idx = _frame_idx(timestep, num_frames, loop)
++        robot_quat_w, omega = _robot_orientation_and_gyro(model, data, body_id)
++        motion_quat_w = motion["body_quat_w"][idx, config["motion_body_index"]]
++        joint_pos_train = _reorder(
++            _joint_positions(data, model, actuator_joint_names),
++            actuator_joint_names,
++            policy_joint_names,
++            "current joint pos",
++        )
++        joint_vel_train = _reorder(
++            _joint_velocities(data, model, actuator_joint_names),
++            actuator_joint_names,
++            policy_joint_names,
++            "current joint vel",
++        )
++
++        feed = _build_policy_feed(
++            input_infos,
++            motion,
++            timestep,
++            loop,
++            num_frames,
++            robot_quat_w,
++            motion_quat_w,
++            omega,
++            joint_pos_train,
++            joint_vel_train,
++            default_joint_pos,
++            action_buffer,
++        )
++
++        action = np.asarray(session.run([output_name], feed)[0], dtype=np.float32).reshape(-1)
++        if action.shape[0] != num_actions:
++            raise ValueError(f"Policy returned {action.shape[0]} actions, expected {num_actions}")
++
++        action_buffer = action.copy()
++        target_train = action * action_scale + default_joint_pos
++        target_dof_pos_actuator = _reorder(target_train, policy_joint_names, actuator_joint_names, "target joint pos")
++
++        if loop or timestep + 1 < num_frames:
++            timestep += 1
++
++    if headless:
++        for _ in range(total_steps):
++            step_once()
++        print(f"[INFO]: Headless simulation completed: steps={total_steps}, policy_steps={counter // decimation}")
++        return
++
++    with mujoco.viewer.launch_passive(model, data) as viewer:
+         start = time.time()
+-        while viewer.is_running() and time.time() - start < simulation_duration:
++        while viewer.is_running() and time.time() - start < duration:
+             step_start = time.time()
+-
+-            mujoco.mj_step(m, d)
+-            qpos, dq, quat, v, omega, gvec, state_tau = get_obs(d)
+-            tau = pd_control(target_dof_pos, d.qpos[7:], stiffness_array, np.zeros_like(damping_array), d.qvel[6:], damping_array)
+-
+-            d.ctrl[:] = tau
+-            counter += 1
+-            
+-            if counter % control_decimation == 0:
+-                # Update motion data
+-                idx = frame_idx(timestep)
+-                motioninput = np.concatenate((motioninputpos[idx, :], motioninputvel[idx, :]), axis=0)
+-                motionquatcurrent = motionquat[idx, motion_body_idx, :]
+-                
+-                # Create observations based on robot type
+-                offset = 0
+-                if robot_type in ["hi", "pi_plus", "g1"]:
+-                    # HI, PI Plus, and G1 observation creation
+-                    robot_quat_w = torch.from_numpy(quat).unsqueeze(0)
+-                    q01 = quat
+-                    q02 = motionquatcurrent
+-                    q10 = quat_inv_np(q01)
+-                    if q02 is not None:
+-                        q12 = quat_mul_np(q10, q02)
+-                    else:
+-                        q12 = q10
+-                    mat = matrix_from_quat(torch.from_numpy(q12))
+-                    motion_ref_ori_b = mat[..., :2].reshape(6)
+-                    
+-                    qpos_xml = d.qpos[7:7 + num_actions]
+-                    qpos_seq = np.array([qpos_xml[joint_xml.index(joint)] for joint in joint_seq])
+-                    qvel_xml = d.qvel[6:6 + num_actions]
+-                    qvel_seq = np.array([qvel_xml[joint_xml.index(joint)] for joint in joint_seq])
+-                    
+-                    obs = create_observation_hi_pi(obs, offset, motioninput, motion_ref_ori_b, omega, qpos_seq, qvel_seq, action_buffer, joint_pos_array_seq, num_actions)
+-                
+-                # Run policy inference
+-                obs_tensor = torch.from_numpy(obs).unsqueeze(0)
+-                action = policy.run(['actions'], {
+-                    'obs': obs_tensor.numpy(),
+-                    'time_step': np.array([frame_idx(timestep)], dtype=np.float32).reshape(1, 1)
+-                })[0]
+-                
+-                action = np.asarray(action).reshape(-1)
+-                action_buffer = action.copy()
+-                target_dof_pos = action * action_scale + joint_pos_array_seq
+-                target_dof_pos = target_dof_pos.reshape(-1,)
+-                target_dof_pos = np.array([target_dof_pos[joint_seq.index(joint)] for joint in joint_xml])
+-                
+-                # advance time step; if not looping and超过序列则保持在末帧
+-                if loop or timestep + 1 < num_frames:
+-                    timestep += 1
+-
++            step_once()
+             viewer.sync()
+-
+-            time_until_next_step = m.opt.timestep - (time.time() - step_start)
++            time_until_next_step = model.opt.timestep - (time.time() - step_start)
+             if time_until_next_step > 0:
+                 time.sleep(time_until_next_step)
+ 
+ 
+-def main():
+-    parser = argparse.ArgumentParser(description="Unified sim2sim script for multiple robots.")
+-    parser.add_argument("--robot", type=str, choices=["hi", "pi_plus", "g1"], required=True,
+-                        default="g1",
+-                        help="Robot type:  hi (Hi), pi_plus (PI Plus), g1 (G1)")
+-    parser.add_argument("--motion_file", type=str, required=True, 
+-                        default="datasets/extend_datasets/lafan1_dataset/g1/train/dance1_subject1.npz",
+-                        help="Path to the motion NPZ file")
+-    parser.add_argument("--xml_path", type=str, required=True,
+-                        default="/root/gpufree-data/lab_lecture/wbc_robot/unitree_model/G1/29dof/g1_29dof.xml",
+-                        help="Path to the robot XML file")
+-    parser.add_argument("--policy_path", type=str, required=True,
+-                        default="/root/gpufree-data/lab_lecture/wbc_robot/logs/rsl_rl/multi_g1_flat/2026-05-20_14-58-09/exported/policy.onnx",
+-                        help="Path to the ONNX policy file")
+-    parser.add_argument("--save_json", action="store_true",
+-                        help="Save motion data to JSON file")
+-    parser.add_argument("--loop", action="store_true",
+-                        help="Loop motion/policy when reaching the end of sequence")
+-    
++def main() -> None:
++    parser = argparse.ArgumentParser(description="Run a motion policy in MuJoCo for sim-to-sim validation.")
++    parser.add_argument("--robot", type=str, choices=["hi", "pi_plus", "g1"], default="g1", help="Robot type.")
++    parser.add_argument(
++        "--motion_file",
++        type=str,
++        default=str(DEFAULT_G1_MOTION_PATH),
++        help="Path to a motion NPZ file, or a directory containing NPZ files.",
++    )
++    parser.add_argument(
++        "--motion_name",
++        type=str,
++        default=DEFAULT_G1_MOTION_NAME,
++        help="Preferred NPZ filename when --motion_file is a directory.",
++    )
++    parser.add_argument(
++        "--xml_path",
++        type=str,
++        default=None,
++        help="Path to the MuJoCo XML file. Defaults to the G1 29dof Unitree MuJoCo scene when available.",
++    )
++    parser.add_argument(
++        "--policy_path",
++        type=str,
++        default=str(DEFAULT_G1_POLICY_PATH),
++        help="Path to ONNX policy, or a directory containing policy.onnx.",
++    )
++    parser.add_argument("--save_json", action="store_true", help="Save motion data next to the NPZ as JSON.")
++    parser.add_argument("--loop", action="store_true", help="Loop motion/policy when reaching the end of sequence.")
++    parser.add_argument("--headless", action="store_true", help="Run without opening a MuJoCo viewer.")
++    parser.add_argument("--duration", type=float, default=SIMULATION_DURATION, help="Simulation duration in seconds.")
++    parser.add_argument("--dt", type=float, default=SIMULATION_DT, help="MuJoCo physics timestep.")
++    parser.add_argument("--decimation", type=int, default=CONTROL_DECIMATION, help="Policy control decimation.")
++    parser.add_argument("--max_steps", type=int, default=None, help="Maximum physics steps for headless smoke tests.")
++    parser.add_argument(
++        "--no_init_from_motion",
++        action="store_true",
++        help="Start from the nominal standing pose instead of the first motion frame.",
++    )
++
+     args = parser.parse_args()
+-    
+-    # All parameters are now required, so no additional validation needed
+-    
+-    print(f"[INFO]: Robot: {args.robot}")
+-    print(f"[INFO]: Motion file: {args.motion_file}")
+-    print(f"[INFO]: XML path: {args.xml_path}")
+-    print(f"[INFO]: Policy path: {args.policy_path}")
+-    
+-    run_simulation(args.robot, args.motion_file, args.xml_path, args.policy_path, args.save_json, args.loop)
++    config = ROBOT_CONFIGS[args.robot]
++    xml_path = args.xml_path or config.get("default_xml")
++    if not xml_path:
++        raise ValueError(f"--xml_path is required for robot {args.robot}")
++
++    motion_file = args.motion_file
++    if Path(motion_file).expanduser().is_dir():
++        motion_file = _resolve_motion_file(motion_file, args.motion_name)
++
++    run_simulation(
++        args.robot,
++        motion_file,
++        xml_path,
++        args.policy_path,
++        save_json=args.save_json,
++        loop=args.loop,
++        headless=args.headless,
++        duration=args.duration,
++        dt=args.dt,
++        decimation=args.decimation,
++        max_steps=args.max_steps,
++        init_from_motion=not args.no_init_from_motion,
++    )
+ 
+ 
+ if __name__ == "__main__":
+-    main()
+\ No newline at end of file
++    main()
+diff --git a/source/wbc_robot/wbc_robot/tasks/manager_based/wbc_robot/mdp/__init__.py b/source/wbc_robot/wbc_robot/tasks/manager_based/wbc_robot/mdp/__init__.py
+index 0d5ed3c..28ba90b 100644
+--- a/source/wbc_robot/wbc_robot/tasks/manager_based/wbc_robot/mdp/__init__.py
++++ b/source/wbc_robot/wbc_robot/tasks/manager_based/wbc_robot/mdp/__init__.py
+@@ -1,7 +1,6 @@
+ """This sub-module contains the functions that are specific to the locomotion environments."""
+ 
+ from isaaclab.envs.mdp import *  # noqa: F401, F403
+-from wbc_robot.tasks.manager_based.wbc_robot.mdp import *  # noqa: F401, F403
+ 
+ from .commands import *  # noqa: F401, F403
+ from .curriculums import *  # noqa: F401, F403
+diff --git a/source/wbc_robot/wbc_robot/utils/exporter.py b/source/wbc_robot/wbc_robot/utils/exporter.py
+index 7ef1b5e..138e4f2 100644
+--- a/source/wbc_robot/wbc_robot/utils/exporter.py
++++ b/source/wbc_robot/wbc_robot/utils/exporter.py
+@@ -4,14 +4,15 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ 
+ import os
+-from typing import Literal
++from typing import TYPE_CHECKING, Literal
+ 
+ import onnx
+ import torch
+ from isaaclab.envs import ManagerBasedRLEnv
+ from isaaclab_rl.rsl_rl.exporter import _OnnxPolicyExporter
+ 
+-from wbc_robot.tasks.manager_based.wbc_robot.mdp import MotionCommand
++if TYPE_CHECKING:
++    from wbc_robot.tasks.manager_based.wbc_robot.mdp.commands import MotionCommand
+ 
+ 
+ # ---------------------------------------------------------

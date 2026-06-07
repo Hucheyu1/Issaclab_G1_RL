@@ -1,0 +1,47 @@
+--- git status ---
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   README.md
+	modified:   scripts/rsl_rl/play.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	deploy/
+	rsl_rl/
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/README.md b/README.md
+index bee1d70..21d9d5d 100644
+--- a/README.md
++++ b/README.md
+@@ -23,6 +23,10 @@ git clone [https://huggingface.co/datasets/unitreerobotics/unitree_model](https:
+ # 安装 Git LFS 并下载 GAE Mimic 动作数据集
+ git lfs install
+ git clone [https://www.modelscope.cn/datasets/seulzx/gae_mimic_dataset.git](https://www.modelscope.cn/datasets/seulzx/gae_mimic_dataset.git)
++
++# 安装修改后的rsl_rl
++cd rsl_rl
++python -m pip install -e .
+ ```
+ ### 2. 数据集脚本工具说明
+ 
+diff --git a/scripts/rsl_rl/play.py b/scripts/rsl_rl/play.py
+index 4af3d12..e400d1e 100644
+--- a/scripts/rsl_rl/play.py
++++ b/scripts/rsl_rl/play.py
+@@ -74,7 +74,7 @@ from isaaclab.utils.pretrained_checkpoint import get_published_pretrained_checkp
+ from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper, export_policy_as_jit, export_policy_as_onnx
+ from isaaclab_tasks.utils import get_checkpoint_path
+ from isaaclab_tasks.utils.hydra import hydra_task_config
+-from rsl_rl.runners import OnPolicyRunner
++from rsl_rl.runners import OnPolicyRunner # type: ignore
+ 
+ 
+ @hydra_task_config(args_cli.task, args_cli.agent)

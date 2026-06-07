@@ -1,0 +1,2019 @@
+--- git status ---
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add/rm <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   README.md
+	deleted:    scripts/list_envs.py
+	deleted:    scripts/random_agent.py
+	modified:   scripts/rsl_rl/play.py
+	deleted:    scripts/zero_agent.py
+	modified:   source/wbc_robot/wbc_robot/tasks/manager_based/wbc_robot/mdp/commands.py
+	modified:   source/wbc_robot/wbc_robot/tasks/manager_based/wbc_robot/mdp/events.py
+	modified:   source/wbc_robot/wbc_robot/tasks/manager_based/wbc_robot/mdp/observations.py
+	modified:   source/wbc_robot/wbc_robot/tasks/manager_based/wbc_robot/mdp/rewards.py
+	modified:   source/wbc_robot/wbc_robot/utils/motion_dataloader.py
+	modified:   source/wbc_robot/wbc_robot/utils/motion_dataset.py
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/README.md b/README.md
+index adb05ab..bee1d70 100644
+--- a/README.md
++++ b/README.md
+@@ -1,7 +1,9 @@
+ # Overview
+ 
+ ## 📋 可用环境总览 (Available Environments)
+-
++```bash
++python scripts/tools/list_envs.py
++```
+ | 序号 | 任务名称 (Task Name) | 入口点 (Entry Point) | 配置文件 (Config) |
+ | :--- | :--- | :--- | :--- |
+ | 1 | `Template-Tracking-Flat-G1-v0` | `isaaclab.envs:ManagerBasedRLEnv` | `wbc_robot.tasks.manager_based.wbc_robot.flat_env_cfg:G1FlatEnvCfg` |
+@@ -22,8 +24,42 @@ git clone [https://huggingface.co/datasets/unitreerobotics/unitree_model](https:
+ git lfs install
+ git clone [https://www.modelscope.cn/datasets/seulzx/gae_mimic_dataset.git](https://www.modelscope.cn/datasets/seulzx/gae_mimic_dataset.git)
+ ```
+-
+-### 2. 训练与测试命令
++### 2. 数据集脚本工具说明
++
++**数据集目录结构：**
++*   `original_datasets`：原始人类数据集
++*   `extend_datasets`：扩展/重定向后的机器人数据集
++    *   `lafan1_dataset`：基础动作与平滑过渡
++    *   `100style_dataset`：性格与风格化运动
++    *   `omomo_dataset`：复杂的全身物理交互
++
++**数据处理脚本集（位于 `scripts/data/`）：**
++
++*   **`csv_to_npz.py` / `offline_csv_to_npz.py`**
++    *   **作用：** 将单个记录了关节角度的 `.csv` 文件，打包压缩成体积更小、读取速度快百倍的 `.npz` 二进制文件。
++*   **`gmr_pkl_to_csv.py`**
++    *   **作用：** GMR（动作重定向）算法跑完后，通常会输出 Python 的 `.pkl`（Pickle）字典文件。这个脚本负责把它解包，并展平保存为人类可读的 `.csv` 文件，作为后续处理的第一步。
++*   **`smplx_interpolate.py`**
++    *   **作用：** 帧率插值（极其重要！）。网上下载的人类视频可能是 30帧/秒 或 60帧/秒，但 RL 物理引擎（Isaac Lab）控制频率可能固定在 50Hz（每 0.02 秒一步）。这个脚本利用数学插值算法，把人类动作的时间轴强行对齐到机器人的控制时间轴上，防止动作变快或变慢。当你有成百上千个动作片段时，这实现了自动化转换。
++*   **`offline_csv_to_npz_datasets.py`**
++    *   **作用：** 一键遍历整个数据集文件夹，把里面所有的 CSV 批量转换为 NPZ。
++*   **`parallel_offline_csv_to_npz_datasets.py`**
++    *   **作用：** `offline_csv_to_npz_datasets.py` 的多进程加速版。利用电脑的多个 CPU 核心同时干活，把处理数据集的时间从几个小时缩短到几分钟。
++*   **`auto_datasets_yaml.py`**
++    *   **作用：** 生成数据集所需的 `info.yaml` 文件。它会自动扫描生成的所有 `.npz` 动作片段，统计它们的长度、数量，并写成配置文件，供 `train.py` 里的 `MultiMotionCommand` 读取使用。
++*   **`extend_datasets.py`**
++    *   **作用：** 负责整理目录结构，把处理好的数据挪到最终的 `extend_datasets` 文件夹中。
++*   **`csv_to_video.py`**
++    *   **作用：** 读取 `.csv` 轨迹，并利用简单的渲染器（比如 matplotlib 3D 或者 pybullet）快速画出一个火柴人/机器人模型，导出为 `.mp4` 视频供预览。
++*   **`replay_npz.py`**
++    *   **作用：** 读取已经打包好的 `.npz` 最终文件，弹出一个 3D 窗口实时回放机器人的动作序列。这是训练前检查数据正确性的最后一道防线。
++*   **`upload_npz.py`**
++    *   **作用：** 辅助脚本，如果你在本地处理好了数据集，但要在云端 GPU 服务器（如 gpufree 容器）上训练，这个脚本可以一键把几 GB 的 `.npz` 数据集传到云服务器或对象存储（如 AWS S3、阿里云 OSS）里。
++```bash
++# 回放动作
++python scripts/replay_npz.py --motion_file datasets/extend_datasets/lafan1_dataset/g1/train/dance1_subject1.npz
++```
++### 3. 训练与测试命令
+ ```bash
+ # 全新训练 (无头模式)
+ python scripts/rsl_rl/train.py --task Template-MultiTracking-Flat-G1-v0 --headless
+@@ -31,16 +67,17 @@ python scripts/rsl_rl/train.py --task Template-MultiTracking-Flat-G1-v0 --headle
+ python scripts/rsl_rl/train.py --task Template-MultiTracking-Flat-G1-v0 --headless --resume --load_run 2026-05-16_20-58-44
+ # 播放与测试 (可视化渲染，设置录制 1000 帧)
+ python scripts/rsl_rl/play.py --task Template-MultiTracking-Flat-G1-v0 --headless --video --video_length 1000 --num_envs 1
++python scripts/rsl_rl/play.py --task Template-MultiTracking-Flat-G1-v0 --num_envs 1 --motion_file datasets/extend_datasets/lafan1_dataset/g1/train/dance1_subject1.npz
+ ```
+ 
+-### 3. 查看训练日志
++### 4. 查看训练日志
+ ```bash
+ tensorboard --logdir /root/gpufree-data/lab_lecture/wbc_robot/logs/rsl_rl/multi_g1_flat/
+ ```
+ 
+ ## ⚙️ 环境配置 (MDP Environment Setup)
+ 
+-### 3.1 动作、命令与事件 (Actions, Commands & Events)
++### 5.1 动作、命令与事件 (Actions, Commands & Events)
+ | 类别 | 模块项 | 详情描述 |
+ | :--- | :--- | :--- |
+ | **动作 (Action)** | `joint_pos` | 29 维，输出给 G1 机器人的各个关节目标位置。 |
+@@ -49,14 +86,14 @@ tensorboard --logdir /root/gpufree-data/lab_lecture/wbc_robot/logs/rsl_rl/multi_
+ | **周期扰动 (Event)** | `push_robot` | 每隔 1.0~3.0 秒给机器人一个外力推力，增加其行走的鲁棒性。 |
+ | **课程学习 (Curriculum)** | `adaptive_sampling_ratio` | 动态调整采样难度，遇到不擅长的动作会增加被采样的概率。 |
+ 
+-### 3.2 观测空间 (Observations)
++### 5.2 观测空间 (Observations)
+ 
+ | 类别 | 维度 | 包含内容与解释 |
+ | :--- | :--- | :--- |
+ | **Actor (Policy)** <br>*(机器人实际能看见的)* | **154 维** | **`command`** (58维): 核心追踪指令，通常包含了未来参考帧的期望状态（目标关节角度、速度等）。<br>**`base_ang_vel`** (3维): 躯干的 Roll/Pitch/Yaw 旋转速度（来自IMU）。<br>**`motion_anchor_ori_b`** (6维): 目标相对姿态。影子参考对象（Anchor）相对于 G1 躯干的朝向偏差。<br>**`joint_pos`** (29维), **`joint_vel`** (29维): 各个关节的当前位置和速度。<br>**`actions`** (29维): 机器人上一帧采取的动作。 |
+ | **Critic (Value)** <br>*(评估用的“上帝视角”)* | **289 维** | *包含 Actor 的所有信息，并额外增加了：*<br>**`projected_gravity`** (3维): 投影重力，将世界坐标系下向下的重力向量通过矩阵投影到机器人倾斜的躯干坐标系中，让机器人立刻感知前倾后仰状态。<br>**`base_lin_vel`** (3维): 真实绝对移动速度（通常在现实中很难准确获得，因此仅供 Critic）。<br>**`motion_anchor_pos_b`** (3维): 数据集里影子相对机器人中心的三维距离偏差 (x, y, z)。<br>**`body_pos`** (42维): 14个刚体连杆的三维位置 (14×3)，极度精准掌握四肢绝对空间。<br>**`body_ori`** (84维): 14个刚体连杆，每个连杆用 6D 连续旋转向量表示姿态 (14×6)。 |
+ 
+-### 3.3 奖励函数设定 (Rewards)
++### 5.3 奖励函数设定 (Rewards)
+ 
+ | 奖励项 | 权重 (Weight) | 描述 (Description) |
+ | :--- | :--- | :--- |
+diff --git a/scripts/list_envs.py b/scripts/list_envs.py
+deleted file mode 100644
+index d82375b..0000000
+--- a/scripts/list_envs.py
++++ /dev/null
+@@ -1,63 +0,0 @@
+-# Copyright (c) 2022-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+-# All rights reserved.
+-#
+-# SPDX-License-Identifier: BSD-3-Clause
+-
+-"""
+-Script to print all the available environments in Isaac Lab.
+-
+-The script iterates over all registered environments and stores the details in a table.
+-It prints the name of the environment, the entry point and the config file.
+-
+-All the environments are registered in the `wbc_robot` extension. They start
+-with `Isaac` in their name.
+-"""
+-
+-"""Launch Isaac Sim Simulator first."""
+-
+-from isaaclab.app import AppLauncher
+-
+-# launch omniverse app
+-app_launcher = AppLauncher(headless=True)
+-simulation_app = app_launcher.app
+-
+-
+-"""Rest everything follows."""
+-
+-import gymnasium as gym
+-import wbc_robot.tasks  # noqa: F401
+-from prettytable import PrettyTable
+-
+-
+-def main():
+-    """Print all environments registered in `wbc_robot` extension."""
+-    # print all the available environments
+-    table = PrettyTable(["S. No.", "Task Name", "Entry Point", "Config"])
+-    table.title = "Available Environments in Isaac Lab"
+-    # set alignment of table columns
+-    table.align["Task Name"] = "l"
+-    table.align["Entry Point"] = "l"
+-    table.align["Config"] = "l"
+-
+-    # count of environments
+-    index = 0
+-    # acquire all Isaac environments names
+-    for task_spec in gym.registry.values():
+-        if "Template-" in task_spec.id:
+-            # add details to table
+-            table.add_row([index + 1, task_spec.id, task_spec.entry_point, task_spec.kwargs["env_cfg_entry_point"]])
+-            # increment count
+-            index += 1
+-
+-    print(table)
+-
+-
+-if __name__ == "__main__":
+-    try:
+-        # run the main function
+-        main()
+-    except Exception as e:
+-        raise e
+-    finally:
+-        # close the app
+-        simulation_app.close()
+diff --git a/scripts/random_agent.py b/scripts/random_agent.py
+deleted file mode 100644
+index 392ec5e..0000000
+--- a/scripts/random_agent.py
++++ /dev/null
+@@ -1,70 +0,0 @@
+-# Copyright (c) 2022-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+-# All rights reserved.
+-#
+-# SPDX-License-Identifier: BSD-3-Clause
+-
+-"""Script to an environment with random action agent."""
+-
+-"""Launch Isaac Sim Simulator first."""
+-
+-import argparse
+-
+-from isaaclab.app import AppLauncher
+-
+-# add argparse arguments
+-parser = argparse.ArgumentParser(description="Random agent for Isaac Lab environments.")
+-parser.add_argument(
+-    "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
+-)
+-parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
+-parser.add_argument("--task", type=str, default=None, help="Name of the task.")
+-# append AppLauncher cli args
+-AppLauncher.add_app_launcher_args(parser)
+-# parse the arguments
+-args_cli = parser.parse_args()
+-
+-# launch omniverse app
+-app_launcher = AppLauncher(args_cli)
+-simulation_app = app_launcher.app
+-
+-"""Rest everything follows."""
+-
+-import gymnasium as gym
+-import isaaclab_tasks  # noqa: F401
+-import torch
+-import wbc_robot.tasks  # noqa: F401
+-from isaaclab_tasks.utils import parse_env_cfg
+-
+-
+-def main():
+-    """Random actions agent with Isaac Lab environment."""
+-    # create environment configuration
+-    env_cfg = parse_env_cfg(
+-        args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric
+-    )
+-    # create environment
+-    env = gym.make(args_cli.task, cfg=env_cfg)
+-
+-    # print info (this is vectorized environment)
+-    print(f"[INFO]: Gym observation space: {env.observation_space}")
+-    print(f"[INFO]: Gym action space: {env.action_space}")
+-    # reset environment
+-    env.reset()
+-    # simulate environment
+-    while simulation_app.is_running():
+-        # run everything in inference mode
+-        with torch.inference_mode():
+-            # sample actions from -1 to 1
+-            actions = 2 * torch.rand(env.action_space.shape, device=env.unwrapped.device) - 1
+-            # apply actions
+-            env.step(actions)
+-
+-    # close the simulator
+-    env.close()
+-
+-
+-if __name__ == "__main__":
+-    # run the main function
+-    main()
+-    # close sim app
+-    simulation_app.close()
+diff --git a/scripts/rsl_rl/play.py b/scripts/rsl_rl/play.py
+index e9dd434..4af3d12 100644
+--- a/scripts/rsl_rl/play.py
++++ b/scripts/rsl_rl/play.py
+@@ -34,6 +34,7 @@ parser.add_argument(
+     help="Use the pre-trained checkpoint from Nucleus.",
+ )
+ parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
++parser.add_argument("--motion_file", type=str, default=None, help="Path to the motion file.")
+ # append RSL-RL cli arguments
+ cli_args.add_rsl_rl_args(parser)
+ # append AppLauncher cli args
+@@ -53,13 +54,13 @@ simulation_app = app_launcher.app
+ 
+ """Rest everything follows."""
+ 
+-import gymnasium as gym
+ import os
+ import time
+-import torch
+-
+-from rsl_rl.runners import OnPolicyRunner
+ 
++import gymnasium as gym
++import isaaclab_tasks  # noqa: F401
++import torch
++import wbc_robot.tasks  # noqa: F401
+ from isaaclab.envs import (
+     DirectMARLEnv,
+     DirectMARLEnvCfg,
+@@ -70,14 +71,10 @@ from isaaclab.envs import (
+ from isaaclab.utils.assets import retrieve_file_path
+ from isaaclab.utils.dict import print_dict
+ from isaaclab.utils.pretrained_checkpoint import get_published_pretrained_checkpoint
+-
+ from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper, export_policy_as_jit, export_policy_as_onnx
+-
+-import isaaclab_tasks  # noqa: F401
+ from isaaclab_tasks.utils import get_checkpoint_path
+ from isaaclab_tasks.utils.hydra import hydra_task_config
+-
+-import wbc_robot.tasks  # noqa: F401
++from rsl_rl.runners import OnPolicyRunner
+ 
+ 
+ @hydra_task_config(args_cli.task, args_cli.agent)
+@@ -95,7 +92,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
+     # note: certain randomizations occur in the environment initialization so we set the seed here
+     env_cfg.seed = agent_cfg.seed
+     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+-
++    if args_cli.motion_file is not None:
++        env_cfg.commands.motion.motion_file = args_cli.motion_file
+     # specify directory for logging experiments
+     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
+     log_root_path = os.path.abspath(log_root_path)
+diff --git a/scripts/zero_agent.py b/scripts/zero_agent.py
+deleted file mode 100644
+index 285c939..0000000
+--- a/scripts/zero_agent.py
++++ /dev/null
+@@ -1,70 +0,0 @@
+-# Copyright (c) 2022-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+-# All rights reserved.
+-#
+-# SPDX-License-Identifier: BSD-3-Clause
+-
+-"""Script to run an environment with zero action agent."""
+-
+-"""Launch Isaac Sim Simulator first."""
+-
+-import argparse
+-
+-from isaaclab.app import AppLauncher
+-
+-# add argparse arguments
+-parser = argparse.ArgumentParser(description="Zero agent for Isaac Lab environments.")
+-parser.add_argument(
+-    "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
+-)
+-parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
+-parser.add_argument("--task", type=str, default=None, help="Name of the task.")
+-# append AppLauncher cli args
+-AppLauncher.add_app_launcher_args(parser)
+-# parse the arguments
+-args_cli = parser.parse_args()
+-
+-# launch omniverse app
+-app_launcher = AppLauncher(args_cli)
+-simulation_app = app_launcher.app
+-
+-"""Rest everything follows."""
+-
+-import gymnasium as gym
+-import isaaclab_tasks  # noqa: F401
+-import torch
+-import wbc_robot.tasks  # noqa: F401
+-from isaaclab_tasks.utils import parse_env_cfg
+-
+-
+-def main():
+-    """Zero actions agent with Isaac Lab environment."""
+-    # parse configuration
+-    env_cfg = parse_env_cfg(
+-        args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric
+-    )
+-    # create environment
+-    env = gym.make(args_cli.task, cfg=env_cfg)
+-
+-    # print info (this is vectorized environment)
+-    print(f"[INFO]: Gym observation space: {env.observation_space}")
+-    print(f"[INFO]: Gym action space: {env.action_space}")
+-    # reset environment
+-    env.reset()
+-    # simulate environment
+-    while simulation_app.is_running():
+-        # run everything in inference mode
+-        with torch.inference_mode():
+-            # compute zero actions
+-            actions = torch.zeros(env.action_space.shape, device=env.unwrapped.device)
+-            # apply actions
+-            env.step(actions)
+-
+-    # close the simulator
+-    env.close()
+-
+-
+-if __name__ == "__main__":
+-    # run the main function
+-    main()
+-    # close sim app
+-    simulation_app.close()
+diff --git a/source/wbc_robot/wbc_robot/tasks/manager_based/wbc_robot/mdp/commands.py b/source/wbc_robot/wbc_robot/tasks/manager_based/wbc_robot/mdp/commands.py
+index caa9795..56a5024 100644
+--- a/source/wbc_robot/wbc_robot/tasks/manager_based/wbc_robot/mdp/commands.py
++++ b/source/wbc_robot/wbc_robot/tasks/manager_based/wbc_robot/mdp/commands.py
+@@ -74,7 +74,10 @@ class MotionCommand(CommandTerm):
+ 
+     def __init__(self, cfg: MotionCommandCfg, env: ManagerBasedRLEnv):
+         super().__init__(cfg, env)
+-
++        # self.robot: 这是物理引擎中 G1 机器人的实体句柄（Articulation）。你可以通过它向物理引擎发送关节力矩，或者读取当前的真实物理状态。
++        # self.robot_anchor_body_index: 真实机器人的“锚点（通常是骨盆 Base）”在机器人身体部件列表中的编号。
++        # self.motion_anchor_body_index: 数据集（影子人类）中的“锚点”在数据集骨骼列表中的编号。这两个索引的作用是让真实机器人和虚拟数据集在空间中有一个对齐的基准点。
++        # self.body_indexes: 一个张量，保存了所有需要追踪的肢体连杆（比如手腕、脚踝）在物理引擎中的具体编号。
+         self.robot: Articulation = env.scene[cfg.asset_name]
+         self.robot_anchor_body_index = self.robot.body_names.index(self.cfg.anchor_body_name)
+         self.motion_anchor_body_index = self.cfg.body_names.index(self.cfg.anchor_body_name)
+@@ -108,6 +111,10 @@ class MotionCommand(CommandTerm):
+         self.metrics["sampling_top1_prob"] = torch.zeros(self.num_envs, device=self.device)
+         self.metrics["sampling_top1_bin"] = torch.zeros(self.num_envs, device=self.device)
+ 
++    # 代码中间那一大串 @property 装饰器修饰的方法，是在构建两套状态数据：
++    # Target (Motion/目标态)：比如 joint_pos, anchor_pos_w。它通过 self.motion（即 MotionLoader）和当前的时间步 self.time_steps，实时查表获取数据集中“影子人类”在这一帧应该处于什么姿态和速度。
++    # Actual (Robot/现实态)：比如 robot_joint_pos, robot_anchor_pos_w。它直接从 Isaac Lab 物理引擎 (self.robot.data) 中读取 G1 机器人当前的真实物理状态。
++    # 有了这两组数据，_update_metrics 就可以轻松算出两者之间的差值（Error），这正好为你前面定义的 9 项 Rewards 提供了最原始的误差来源。
+     @property
+     def command(self) -> torch.Tensor:  # TODO Consider again if this is the best observation
+         return torch.cat([self.joint_pos, self.joint_vel], dim=1)
+@@ -250,6 +257,8 @@ class MotionCommand(CommandTerm):
+         self.metrics["sampling_top1_prob"][:] = pmax
+         self.metrics["sampling_top1_bin"][:] = imax.float() / self.bin_count
+ 
++    # 状态重置与域随机化：当环境需要重置时（比如机器人摔倒了），这个函数会被调用。它会根据自适应采样策略重新选取一个新的时间步（即动作序列中的新起点），
++    # 并且在这个基础上注入一些随机噪声（比如位置、速度、关节角度的微小扰动），以增强机器人的鲁棒性和泛化能力。最后它会把新的目标状态写入物理引擎，让机器人从新的参考位姿开始练习。
+     def _resample_command(self, env_ids: Sequence[int]):
+         if len(env_ids) == 0:
+             return
+@@ -362,29 +371,32 @@ class MotionCommand(CommandTerm):
+ class MotionCommandCfg(CommandTermCfg):
+     """单动作(Motion)指令配置。"""
+ 
+-    class_type: type = MotionCommand
++    class_type: type = MotionCommand  # 控制类实现，此处为 MotionCommand
+ 
+-    asset_name: str = MISSING
++    asset_name: str = MISSING  # 仿真场景中目标机器人资产的名称
+ 
+-    motion_file: str = MISSING
+-    anchor_body_name: str = MISSING
+-    body_names: list[str] = MISSING
++    motion_file: str = MISSING  # 要加载的单动作数据文件(.npz)路径
++    anchor_body_name: str = MISSING  # 锚点刚体（如根节点/骨盆）名称，用于对齐整体位姿
++    body_names: list[str] = MISSING  # 需要追踪其运动轨迹的目标部位刚体列表
+ 
+-    pose_range: dict[str, tuple[float, float]] = {}
+-    velocity_range: dict[str, tuple[float, float]] = {}
++    # 机器人重置（Resample）时注入的初始随机噪声区间，用于增强鲁棒性
++    pose_range: dict[str, tuple[float, float]] = {}  # 根节点的六自由度位姿(x, y, z, roll, pitch, yaw)噪声区间
++    velocity_range: dict[str, tuple[float, float]] = {}  # 根节点线速度和角速度诸注入的噪声区间
+ 
+-    joint_position_range: tuple[float, float] = (-0.52, 0.52)
++    joint_position_range: tuple[float, float] = (-0.52, 0.52)  # 给各个关节位置注入的随机噪声范围
+ 
+-    adaptive_kernel_size: int = 1
+-    adaptive_lambda: float = 0.8
+-    adaptive_uniform_ratio: float = 0.1
+-    adaptive_alpha: float = 0.001
++    # 自适应时间片段采样（Adaptive Sampling）参数设置：重点练机器人容易摔倒的阶段
++    adaptive_kernel_size: int = 1  # 失败概率计算时的平滑卷积核大小（辐射到摔倒帧附近）
++    adaptive_lambda: float = 0.8  # 卷积核指数衰减系数，离摔倒帧越远增加的权重越小
++    adaptive_uniform_ratio: float = 0.1  # 混合的均匀随机采样比例兜底，防止完全陷入某一段
++    adaptive_alpha: float = 0.001  # 历史失败记录EMA衰减权重，控制遗忘速率
+ 
++    # 可视化及调试（Debug Viz）配置
+     anchor_visualizer_cfg: VisualizationMarkersCfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/Command/pose")
+-    anchor_visualizer_cfg.markers["frame"].scale = (0.2, 0.2, 0.2)
++    anchor_visualizer_cfg.markers["frame"].scale = (0.2, 0.2, 0.2)  # 锚点当前目标参考位姿的可视化大小
+ 
+     body_visualizer_cfg: VisualizationMarkersCfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/Command/pose")
+-    body_visualizer_cfg.markers["frame"].scale = (0.1, 0.1, 0.1)
++    body_visualizer_cfg.markers["frame"].scale = (0.1, 0.1, 0.1)  # 身体其他部位目标参考位姿的可视化大小
+ 
+ 
+ class MultiMotionCommand(CommandTerm):
+@@ -838,79 +850,79 @@ class MultiMotionCommand(CommandTerm):
+ 
+ @configclass
+ class MultiMotionCommandCfg(CommandTermCfg):
+-    """Configuration for multi-motion command with global bins sampling."""
++    """基于全局时间窗(global bins)采样策略的多动作指令配置。"""
+ 
+     class_type: type = MultiMotionCommand
+ 
+     asset_name: str = MISSING
+-    """Name of the robot asset in the scene."""
++    """场景中目标机器人资产的名称。"""
+ 
+-    # Dataset configuration
++    # 数据集配置
+     dataset_dirs: list[str] = MISSING
+-    """List of dataset directories containing NPZ motion files."""
++    """包含 NPZ 动作文件的数据集目录列表。"""
+ 
+     robot_name: str = MISSING
+-    """Robot name for dataset filtering."""
++    """用于数据集过滤的机器人名称。"""
+ 
+     splits: list[str | list[str]] = MISSING
+-    """Dataset splits configuration. Flexible format supporting:
+-    - Single split per dataset: ["train", "val", "test"]
+-    - Combined splits per dataset: [["train", "walk_subset"], "test"]
+-    - Mixed format: ["train", ["train", "walk_subset"], "test"]
+-
+-    Examples:
+-        splits=["train", "val"]  # Use "train" for dataset_dirs[0], "val" for dataset_dirs[1]
+-        splits=[["train", "walk"], "test"]  # Combine "train"+"walk" for dataset_dirs[0], "test" for dataset_dirs[1]
++    """数据集分割(splits)配置。支持灵活的格式：
++    - 每个数据集单一切分：["train", "val", "test"]
++    - 每个数据集合并切分：[["train", "walk_subset"], "test"]
++    - 混合格式：["train", ["train", "walk_subset"], "test"]
++
++    示例：
++        splits=["train", "val"]  # 对 dataset_dirs[0] 使用 "train"，对 dataset_dirs[1] 使用 "val"
++        splits=[["train", "walk"], "test"]  # 对 dataset_dirs[0] 结合使用 "train"+"walk"，对 dataset_dirs[1] 使用 "test"
+     """
+ 
+-    # Distributed training configuration
++    # 分布式训练配置
+     distributed_world_size: int = 1
+-    """Total number of distributed processes."""
++    """分布式进程的总数 (World Size)。"""
+ 
+     distributed_rank: int = 0
+-    """Current process rank in distributed training."""
++    """当前进程在分布式训练中的序号 (Rank)。"""
+ 
+     distributed_data_split: bool = False
+-    """Whether to enable distributed data sharding across ranks."""
++    """是否启用跨秩(ranks)的分布式数据分片。"""
+ 
+-    # Body configuration
++    # 刚体配置
+     anchor_body_name: str = MISSING
+-    """Name of the anchor body (usually root or pelvis)."""
++    """锚点刚体的名称（通常是根节点 root 或骨盆 pelvis）。"""
+ 
+     body_names: list[str] = MISSING
+-    """List of body names to track."""
++    """需要追踪其运动轨迹的目标部位刚体列表。"""
+ 
+-    # Initialization noise ranges
++    # 初始化噪声范围
+     pose_range: dict[str, tuple[float, float]] = {}
+-    """Pose noise ranges for x, y, z, roll, pitch, yaw."""
++    """给根节点位姿 (x, y, z, roll, pitch, yaw) 注入的噪声范围。"""
+ 
+     velocity_range: dict[str, tuple[float, float]] = {}
+-    """Velocity noise ranges for x, y, z, roll, pitch, yaw."""
++    """给根节点速度 (x, y, z, roll, pitch, yaw) 注入的噪声范围。"""
+ 
+     joint_position_range: tuple[float, float] = (-0.52, 0.52)
+-    """Joint position noise range."""
++    """关节位置的噪声范围。"""
+ 
+-    # Adaptive sampling parameters
++    # 自适应采样参数
+     adaptive_kernel_size: int = 1
+-    """Kernel size for convolution smoothing of bin probabilities."""
++    """用于时间片段(bin)概率卷积平滑的核大小。"""
+ 
+     adaptive_lambda: float = 0.8
+-    """Exponential decay factor for kernel weights."""
++    """核权重的指数衰减系数。"""
+ 
+     adaptive_uniform_ratio: float = 0.9
+-    """Ratio of uniform sampling mixed with failure-based sampling."""
++    """均匀采样与基于失败（自适应）采样的混合比例（均匀采样的占比兜底）。"""
+ 
+     adaptive_cap: int = 2
+-    """Cap for bin failure counts to prevent extreme probabilities."""
++    """时间片段(bin)失败次数的上限，防止产生极端（过大）的概率分布。"""
+ 
+     adaptive_alpha: float = 0.001
+-    """EMA smoothing factor for bin failure counts."""
++    """时间片段(bin)失败次数的指数移动平均(EMA)平滑衰减系数。"""
+ 
+-    # Evaluation-specific parameters
++    # 评估专用参数
+     eval_target_attempts: int = 128
+-    """Number of evaluation attempts per motion (used by EvalMultiMotionCommand)."""
++    """每个动作的评估尝试次数（由 EvalMultiMotionCommand 使用）。"""
+ 
+-    # Visualization
++    # 可视化调试
+     anchor_visualizer_cfg: VisualizationMarkersCfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/Command/pose")
+     anchor_visualizer_cfg.markers["frame"].scale = (0.2, 0.2, 0.2)
+ 
+@@ -919,46 +931,45 @@ class MultiMotionCommandCfg(CommandTermCfg):
+ 
+ 
+ class GAEMimic_MultiMotionCommand(MultiMotionCommand):
+-    """GAEMimic-specific multi-motion command supporting SMPL-X data access.
++    """支持 SMPL-X 数据访问的 GAEMimic 专用多动作指令。
+ 
+-    Extends MultiMotionCommand to use Unify_Motion_Dataset and Unify_Motion_Dataloader,
+-    enabling access to both robot and SMPL-X motion data for multi-modal motion tracking.
++    扩展了 MultiMotionCommand 以使用 Unify_Motion_Dataset 和 Unify_Motion_Dataloader，
++    从而允许访问机器人和 SMPL-X 的运动数据，用于多模态运动追踪。
+ 
+-    Key differences from MultiMotionCommand:
+-    - Uses Unify_Motion_Dataset instead of Motion_Dataset for paired data loading
+-    - Uses Unify_Motion_Dataloader instead of Motion_Dataloader with dual-source buffers
+-    - Provides smplx_pose_body property for accessing SMPL-X pose data
++    与 MultiMotionCommand 的主要区别：
++    - 使用 Unify_Motion_Dataset 代替 Motion_Dataset 进行配堆数据加载
++    - 使用 Unify_Motion_Dataloader 及其双源缓冲区代替 Motion_Dataloader
++    - 提供 smplx_pose_body 属性以访问 SMPL-X 姿态数据
+     """
+ 
+     cfg: GAEMimic_MultiMotionCommandCfg
+ 
+     def __init__(self, cfg: GAEMimic_MultiMotionCommandCfg, env: ManagerBasedRLEnv):
+-        """Initialize GAEMimic command with unified dataset support.
++        """初始化带有统一数据集支持的 GAEMimic 指令。
+ 
+-        Args:
+-            cfg: GAEMimic_MultiMotionCommandCfg configuration
+-            env: ManagerBasedRLEnv environment
++        参数:
++            cfg: GAEMimic_MultiMotionCommandCfg 配置
++            env: ManagerBasedRLEnv 环境
+         """
+-        # Call parent initialization first to set up robot and environment properties
++        # 首先调用父类初始化以设置机器人和环境属性
+         super().__init__(cfg, env)
+ 
+     def _init_datasets(self):
+-        """Initialize unified dataset and dataloader for SMPL-X support.
++        """初始化用于支持 SMPL-X 的统一数据集和数据加载器。
+ 
+-        Uses Unify_Motion_Dataset which extends Motion_Dataset to load
+-        extended NPZ files (already processed by extend_datasets.py) containing
+-        SMPL-X pose body data along with standard robot motion data.
++        使用继承自 Motion_Dataset 的 Unify_Motion_Dataset 来加载扩展的 NPZ 文件
++        （已经过 extend_datasets.py 处理），这些文件包含 SMPL-X 身体姿态数据以及标准机器人运动数据。
+         """
+         print(f"[GAEMimic_MultiMotionCommand] Loading unified dataset from: {self.cfg.dataset_dirs}")
+ 
+-        # Create unified dataset with extended keys (SMPL-X data)
++        # 使用扩展键 (SMPL-X 数据) 创建统一数据集
+         self.dataset = Unify_Motion_Dataset(
+             dataset_dirs=self.cfg.dataset_dirs,
+             robot_name=self.cfg.robot_name,
+             splits=self.cfg.splits,
+         )
+ 
+-        # Create unified dataloader with extended motion buffer
++        # 使用扩展的运动缓冲区创建统一的数据加载器
+         self.dataloader = Unify_Motion_Dataloader(
+             dataset=self.dataset,
+             body_indexes=self.body_indexes,
+@@ -981,20 +992,20 @@ class GAEMimic_MultiMotionCommand(MultiMotionCommand):
+         return self.dataloader.motion_buffer.robot_keypoints_rot[self.global_time_steps]
+ 
+     def motion_robot_joint_pos_vel(self, interval: int, frames: int):
+-        # [num_envs, 1] -> [num_envs, frames] via broadcasting with offsets
++        # 通过采用偏移量广播: [num_envs, 1] -> [num_envs, frames]
+         offsets = interval * torch.arange(
+             frames, dtype=self.global_time_steps.dtype, device=self.global_time_steps.device
+         )
+         self.future_global_time_steps = self.global_time_steps.unsqueeze(-1) + offsets
+ 
+-        # Clamp to max valid global timestep for each motion
+-        # Each environment may be at a different motion, so we need per-motion clamping
++        # 将全局时间步限制在每个动作的最大有效范围内
++        # 每个环境可能处于不同的动作状态，因此我们需要在每个动作的基础上进行截断
+         motion_end_steps = (
+             self.dataloader.motion_offsets[self.motion_ids] + self.dataloader.motion_lengths[self.motion_ids] - 1
+         )
+         self.future_global_time_steps = torch.clamp(self.future_global_time_steps, max=motion_end_steps.unsqueeze(-1))
+ 
+-        # Index into motion_buffer using global timesteps (abstracted away motion_id/time_steps)
++        # 使用全局时间步作为索引对 motion_buffer 存取数据 (抽象出了 motion_id/time_steps)
+         return torch.cat(
+             [
+                 self.dataloader.motion_buffer.joint_pos[self.future_global_time_steps],
+@@ -1004,14 +1015,14 @@ class GAEMimic_MultiMotionCommand(MultiMotionCommand):
+         )
+ 
+     def motion_robot_joint_pos(self, interval: int, frames: int):
+-        # [num_envs, 1] -> [num_envs, frames] via broadcasting with offsets
++        # 通过采用偏移量广播: [num_envs, 1] -> [num_envs, frames]
+         offsets = interval * torch.arange(
+             frames, dtype=self.global_time_steps.dtype, device=self.global_time_steps.device
+         )
+         self.future_global_time_steps = self.global_time_steps.unsqueeze(-1) + offsets
+ 
+-        # Clamp to max valid global timestep for each motion
+-        # Each environment may be at a different motion, so we need per-motion clamping
++        # 将全局时间步限制在每个动作的最大有效范围内
++        # 每个环境可能处于不同的动作状态，因此我们需要在每个动作的基础上进行截断
+         motion_end_steps = (
+             self.dataloader.motion_offsets[self.motion_ids] + self.dataloader.motion_lengths[self.motion_ids] - 1
+         )
+@@ -1020,71 +1031,71 @@ class GAEMimic_MultiMotionCommand(MultiMotionCommand):
+         return self.dataloader.motion_buffer.joint_pos[self.future_global_time_steps]
+ 
+     def motion_smplx_pose_body(self, interval: int, frames: int):
+-        # [num_envs, 1] -> [num_envs, frames] via broadcasting with offsets
++        # 通过采用偏移量广播: [num_envs, 1] -> [num_envs, frames]
+         offsets = interval * torch.arange(
+             frames, dtype=self.global_time_steps.dtype, device=self.global_time_steps.device
+         )
+         self.future_global_time_steps = self.global_time_steps.unsqueeze(-1) + offsets
+ 
+-        # Clamp to max valid global timestep for each motion
+-        # Each environment may be at a different motion, so we need per-motion clamping
++        # 将全局时间步限制在每个动作的最大有效范围内
++        # 每个环境可能处于不同的动作状态，因此我们需要在每个动作的基础上进行截断
+         motion_end_steps = (
+             self.dataloader.motion_offsets[self.motion_ids] + self.dataloader.motion_lengths[self.motion_ids] - 1
+         )
+         self.future_global_time_steps = torch.clamp(self.future_global_time_steps, max=motion_end_steps.unsqueeze(-1))
+ 
+-        # Index into motion_buffer using global timesteps (abstracted away motion_id/time_steps)
++        # 使用全局时间步作为索引对 motion_buffer 存取数据 (抽象出了 motion_id/time_steps)
+         return self.dataloader.motion_buffer.smplx_pose_body[self.future_global_time_steps]
+ 
+     def motion_keypoints_trans(self, interval: int, frames: int):
+-        # [num_envs, 1] -> [num_envs, frames] via broadcasting with offsets
++        # 通过采用偏移量广播: [num_envs, 1] -> [num_envs, frames]
+         offsets = interval * torch.arange(
+             frames, dtype=self.global_time_steps.dtype, device=self.global_time_steps.device
+         )
+         self.future_global_time_steps = self.global_time_steps.unsqueeze(-1) + offsets
+ 
+-        # Clamp to max valid global timestep for each motion
+-        # Each environment may be at a different motion, so we need per-motion clamping
++        # 将全局时间步限制在每个动作的最大有效范围内
++        # 每个环境可能处于不同的动作状态，因此我们需要在每个动作的基础上进行截断
+         motion_end_steps = (
+             self.dataloader.motion_offsets[self.motion_ids] + self.dataloader.motion_lengths[self.motion_ids] - 1
+         )
+         self.future_global_time_steps = torch.clamp(self.future_global_time_steps, max=motion_end_steps.unsqueeze(-1))
+ 
+-        # Index into motion_buffer using global timesteps (abstracted away motion_id/time_steps)
++        # 使用全局时间步作为索引对 motion_buffer 存取数据 (抽象出了 motion_id/time_steps)
+         return self.dataloader.motion_buffer.robot_keypoints_trans[self.future_global_time_steps]
+ 
+     def motion_keypoints_rot(self, interval: int, frames: int):
+-        # [num_envs, 1] -> [num_envs, frames] via broadcasting with offsets
++        # 通过采用偏移量广播: [num_envs, 1] -> [num_envs, frames]
+         offsets = interval * torch.arange(
+             frames, dtype=self.global_time_steps.dtype, device=self.global_time_steps.device
+         )
+         self.future_global_time_steps = self.global_time_steps.unsqueeze(-1) + offsets
+ 
+-        # Clamp to max valid global timestep for each motion
+-        # Each environment may be at a different motion, so we need per-motion clamping
++        # 将全局时间步限制在每个动作的最大有效范围内
++        # 每个环境可能处于不同的动作状态，因此我们需要在每个动作的基础上进行截断
+         motion_end_steps = (
+             self.dataloader.motion_offsets[self.motion_ids] + self.dataloader.motion_lengths[self.motion_ids] - 1
+         )
+         self.future_global_time_steps = torch.clamp(self.future_global_time_steps, max=motion_end_steps.unsqueeze(-1))
+ 
+-        # Index into motion_buffer using global timesteps (abstracted away motion_id/time_steps)
++        # 使用全局时间步作为索引对 motion_buffer 存取数据 (抽象出了 motion_id/time_steps)
+         return self.dataloader.motion_buffer.robot_keypoints_rot[self.future_global_time_steps]
+ 
+     def motion_keypoints_se3(self, interval: int, frames: int):
+-        # [num_envs, 1] -> [num_envs, frames] via broadcasting with offsets
++        # 通过采用偏移量广播: [num_envs, 1] -> [num_envs, frames]
+         offsets = interval * torch.arange(
+             frames, dtype=self.global_time_steps.dtype, device=self.global_time_steps.device
+         )
+         self.future_global_time_steps = self.global_time_steps.unsqueeze(-1) + offsets
+ 
+-        # Clamp to max valid global timestep for each motion
+-        # Each environment may be at a different motion, so we need per-motion clamping
++        # 将全局时间步限制在每个动作的最大有效范围内
++        # 每个环境可能处于不同的动作状态，因此我们需要在每个动作的基础上进行截断
+         motion_end_steps = (
+             self.dataloader.motion_offsets[self.motion_ids] + self.dataloader.motion_lengths[self.motion_ids] - 1
+         )
+         self.future_global_time_steps = torch.clamp(self.future_global_time_steps, max=motion_end_steps.unsqueeze(-1))
+ 
+-        # Index into motion_buffer using global timesteps (abstracted away motion_id/time_steps)
++        # 使用全局时间步作为索引对 motion_buffer 存取数据 (抽象出了 motion_id/time_steps)
+         keypoints = torch.cat(
+             [
+                 self.dataloader.motion_buffer.robot_keypoints_trans[self.future_global_time_steps],
+@@ -1097,6 +1108,6 @@ class GAEMimic_MultiMotionCommand(MultiMotionCommand):
+ 
+ @configclass
+ class GAEMimic_MultiMotionCommandCfg(MultiMotionCommandCfg):
+-    """Configuration for GAEMimic multi-motion command with SMPL-X support."""
++    """支持 SMPL-X 数据的 GAEMimic 多动作指令配置。"""
+ 
+     class_type: type = GAEMimic_MultiMotionCommand
+diff --git a/source/wbc_robot/wbc_robot/tasks/manager_based/wbc_robot/mdp/events.py b/source/wbc_robot/wbc_robot/tasks/manager_based/wbc_robot/mdp/events.py
+index de24727..35a4253 100644
+--- a/source/wbc_robot/wbc_robot/tasks/manager_based/wbc_robot/mdp/events.py
++++ b/source/wbc_robot/wbc_robot/tasks/manager_based/wbc_robot/mdp/events.py
+@@ -21,21 +21,21 @@ def randomize_joint_default_pos(
+     distribution: Literal["uniform", "log_uniform", "gaussian"] = "uniform",
+ ):
+     """
+-    Randomize the joint default positions which may be different from URDF due to calibration errors.
++    随机化关节的默认位置，由于标定误差，这些位置可能与 URDF 中的不同。
+     """
+-    # extract the used quantities (to enable type-hinting)
++    # 提取使用的变量 (以启用类型提示)
+     asset: Articulation = env.scene[asset_cfg.name]
+ 
+-    # save nominal value for export
++    # 导出时保存标称值
+     asset.data.default_joint_pos_nominal = torch.clone(asset.data.default_joint_pos[0])
+ 
+-    # resolve environment ids
++    # 解析环境 ids
+     if env_ids is None:
+         env_ids = torch.arange(env.scene.num_envs, device=asset.device)
+ 
+-    # resolve joint indices
++    # 解析关节索引
+     if asset_cfg.joint_ids == slice(None):
+-        joint_ids = slice(None)  # for optimization purposes
++        joint_ids = slice(None)  # 出于优化目的
+     else:
+         joint_ids = torch.tensor(asset_cfg.joint_ids, dtype=torch.int, device=asset.device)
+ 
+@@ -48,7 +48,7 @@ def randomize_joint_default_pos(
+         if env_ids != slice(None) and joint_ids != slice(None):
+             env_ids = env_ids[:, None]
+         asset.data.default_joint_pos[env_ids, joint_ids] = pos
+-        # update the offset in action since it is not updated automatically
++        # 更新 action 中的 offset，因为它不会自动更新
+         env.action_manager.get_term("joint_pos")._offset[env_ids, joint_ids] = pos
+ 
+ 
+@@ -58,36 +58,35 @@ def randomize_rigid_body_com(
+     com_range: dict[str, tuple[float, float]],
+     asset_cfg: SceneEntityCfg,
+ ):
+-    """Randomize the center of mass (CoM) of rigid bodies by adding a random value sampled from the given ranges.
++    """通过加入从给定范围采样得到的随机值来随机化刚体的质心 (CoM)。
+ 
+     .. note::
+-        This function uses CPU tensors to assign the CoM. It is recommended to use this function
+-        only during the initialization of the environment.
++        此函数使用 CPU 张量来赋值 CoM。建议仅在初始化环境时使用此函数。
+     """
+-    # extract the used quantities (to enable type-hinting)
++    # 提取使用的变量 (以启用类型提示)
+     asset: Articulation = env.scene[asset_cfg.name]
+-    # resolve environment ids
++    # 解析环境 ids
+     if env_ids is None:
+         env_ids = torch.arange(env.scene.num_envs, device="cpu")
+     else:
+         env_ids = env_ids.cpu()
+ 
+-    # resolve body indices
++    # 解析刚体索引
+     if asset_cfg.body_ids == slice(None):
+         body_ids = torch.arange(asset.num_bodies, dtype=torch.int, device="cpu")
+     else:
+         body_ids = torch.tensor(asset_cfg.body_ids, dtype=torch.int, device="cpu")
+ 
+-    # sample random CoM values
++    # 采样随机质心(CoM)值
+     range_list = [com_range.get(key, (0.0, 0.0)) for key in ["x", "y", "z"]]
+     ranges = torch.tensor(range_list, device="cpu")
+     rand_samples = math_utils.sample_uniform(ranges[:, 0], ranges[:, 1], (len(env_ids), 3), device="cpu").unsqueeze(1)
+ 
+-    # get the current com of the bodies (num_assets, num_bodies)
++    # 获取当前刚体的质心 (num_assets, num_bodies)
+     coms = asset.root_physx_view.get_coms().clone()
+ 
+-    # Randomize the com in range
++    # 在指定范围内随机化质心
+     coms[:, body_ids, :3] += rand_samples
+ 
+-    # Set the new coms
++    # 设置新质心
+     asset.root_physx_view.set_coms(coms, env_ids)
+diff --git a/source/wbc_robot/wbc_robot/tasks/manager_based/wbc_robot/mdp/observations.py b/source/wbc_robot/wbc_robot/tasks/manager_based/wbc_robot/mdp/observations.py
+index f71b2eb..53b2c3a 100644
+--- a/source/wbc_robot/wbc_robot/tasks/manager_based/wbc_robot/mdp/observations.py
++++ b/source/wbc_robot/wbc_robot/tasks/manager_based/wbc_robot/mdp/observations.py
+@@ -10,13 +10,16 @@ from wbc_robot.tasks.manager_based.wbc_robot.mdp.commands import MotionCommand
+ if TYPE_CHECKING:
+     from isaaclab.envs import ManagerBasedEnv
+ 
+-
++# 获取机器人的本体骨盆中心（Anchor）在世界坐标系(_w)下的朝向。
++# 计算： 它通过 matrix_from_quat 把四元数转成了3×3 旋转矩阵，但注意切片 mat[..., :2]。在强化学习中，表示 3D 旋转用完整的 9 个元素的旋转矩阵冗余，
++# 用四元数又因为存在“双重覆盖（q和-q是同一姿态）”易造成神经网络发散。所以这里采用了机器人领域经典的 6D朝向表示法：取旋转矩阵的前两列（6个数字），
++# 这 6 个数字可以被网络无歧义且连续地解读。最后展开拉平 (reshape)。
+ def robot_anchor_ori_w(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
+     command: MotionCommand = env.command_manager.get_term(command_name)
+     mat = matrix_from_quat(command.robot_anchor_quat_w)
+     return mat[..., :2].reshape(mat.shape[0], -1)
+ 
+-
++# 把机器人的线速度和角速度获取过来，直接切片取出线速度的前3维和角速度的后3维，并拉平展开。
+ def robot_anchor_lin_vel_w(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
+     command: MotionCommand = env.command_manager.get_term(command_name)
+ 
+@@ -28,7 +31,10 @@ def robot_anchor_ang_vel_w(env: ManagerBasedEnv, command_name: str) -> torch.Ten
+ 
+     return command.robot_anchor_vel_w[:, 3:6].view(env.num_envs, -1)
+ 
+-
++# 获取机器人全身刚体在局部坐标系中的位置姿态
++# 用途： 神经网络只靠关节角度很难直观感知自己四肢究竟在哪，因此这个函数给 Critic（评论家网络）提供机器人全身骨架的精确定位
++# 计算： subtract_frame_transforms 相当于执行了一个坐标系变换。它把 14个全身连杆（大腿小腿等）在世界坐标系(_w)的位置robot_body_pos_w，减去了骨盆中心的位置robot_anchor_pos_w。
++# 结果： 算出来的是“左手相对于肚子在哪里”、“右脚相对于肚子在哪里”，这就叫做 Body 系下的坐标(_b)。最后拉平成所有连杆的位置张量传出。
+ def robot_body_pos_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
+     command: MotionCommand = env.command_manager.get_term(command_name)
+ 
+@@ -42,7 +48,7 @@ def robot_body_pos_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
+ 
+     return pos_b.view(env.num_envs, -1)
+ 
+-
++# 用途： 与上一个函数相仿，这负责求解各个部分连杆相对于主躯干的旋转差（朝向）。并也是提取前两列转成了 6D 连续姿态向量（14部件 × 6维 = 84维度数据）。
+ def robot_body_ori_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
+     command: MotionCommand = env.command_manager.get_term(command_name)
+ 
+@@ -56,7 +62,7 @@ def robot_body_ori_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
+     mat = matrix_from_quat(ori_b)
+     return mat[..., :2].reshape(mat.shape[0], -1)
+ 
+-
++# 获取目标参考姿态(Command)相对于机器人的差值
+ def motion_anchor_pos_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
+     command: MotionCommand = env.command_manager.get_term(command_name)
+ 
+diff --git a/source/wbc_robot/wbc_robot/tasks/manager_based/wbc_robot/mdp/rewards.py b/source/wbc_robot/wbc_robot/tasks/manager_based/wbc_robot/mdp/rewards.py
+index edf84df..c289e8a 100644
+--- a/source/wbc_robot/wbc_robot/tasks/manager_based/wbc_robot/mdp/rewards.py
++++ b/source/wbc_robot/wbc_robot/tasks/manager_based/wbc_robot/mdp/rewards.py
+@@ -13,28 +13,33 @@ if TYPE_CHECKING:
+     from isaaclab.envs import ManagerBasedRLEnv
+ 
+ 
++# 辅助函数：根据提供的关节名称列表，获取它们在追踪网络(Command)中的索引号
+ def _get_body_indexes(command: MotionCommand, body_names: list[str] | None) -> list[int]:
+     return [i for i, name in enumerate(command.cfg.body_names) if (body_names is None) or (name in body_names)]
+ 
+ 
++# 计算全局锚点（通常为根节点骨盆）位置误差的指数奖励
+ def motion_global_anchor_position_error_exp(env: ManagerBasedRLEnv, command_name: str, std: float) -> torch.Tensor:
+     command: MotionCommand = env.command_manager.get_term(command_name)
+     error = torch.sum(torch.square(command.anchor_pos_w - command.robot_anchor_pos_w), dim=-1)
+     return torch.exp(-error / std**2)
+ 
+ 
++# 计算全局锚点姿态/朝向（四元数）误差的指数奖励
+ def motion_global_anchor_orientation_error_exp(env: ManagerBasedRLEnv, command_name: str, std: float) -> torch.Tensor:
+     command: MotionCommand = env.command_manager.get_term(command_name)
+     error = quat_error_magnitude(command.anchor_quat_w, command.robot_anchor_quat_w) ** 2
+     return torch.exp(-error / std**2)
+ 
+ 
++# 计算全局锚点线速度（XYZ轴移动速度）误差的指数奖励
+ def motion_global_anchor_velocity_error_exp(env: ManagerBasedRLEnv, command_name: str, std: float) -> torch.Tensor:
+     command: MotionCommand = env.command_manager.get_term(command_name)
+     error = torch.sum(torch.square(command.anchor_lin_vel_w - command.robot_anchor_lin_vel_w), dim=-1)
+     return torch.exp(-error / std**2)
+ 
+ 
++# 计算全局锚点角速度（旋转速度）误差的指数奖励
+ def motion_global_anchor_angular_velocity_error_exp(
+     env: ManagerBasedRLEnv, command_name: str, std: float
+ ) -> torch.Tensor:
+@@ -43,6 +48,7 @@ def motion_global_anchor_angular_velocity_error_exp(
+     return torch.exp(-error / std**2)
+ 
+ 
++# 计算被追踪骨骼连杆（Body）相对锚点的局部位置(Position)误差均值的指数奖励
+ def motion_relative_body_position_error_exp(
+     env: ManagerBasedRLEnv, command_name: str, std: float, body_names: list[str] | None = None
+ ) -> torch.Tensor:
+@@ -54,6 +60,7 @@ def motion_relative_body_position_error_exp(
+     return torch.exp(-error.mean(-1) / std**2)
+ 
+ 
++# 计算被追踪骨骼连杆（Body）相对锚点的局部朝向(Orientation/Quat)误差均值的指数奖励
+ def motion_relative_body_orientation_error_exp(
+     env: ManagerBasedRLEnv, command_name: str, std: float, body_names: list[str] | None = None
+ ) -> torch.Tensor:
+@@ -66,6 +73,7 @@ def motion_relative_body_orientation_error_exp(
+     return torch.exp(-error.mean(-1) / std**2)
+ 
+ 
++# 计算各个身体连杆在世界坐标系下线速度误差的平均指数奖励
+ def motion_global_body_linear_velocity_error_exp(
+     env: ManagerBasedRLEnv, command_name: str, std: float, body_names: list[str] | None = None
+ ) -> torch.Tensor:
+@@ -77,6 +85,7 @@ def motion_global_body_linear_velocity_error_exp(
+     return torch.exp(-error.mean(-1) / std**2)
+ 
+ 
++# 计算各个身体连杆在世界坐标系下角速度误差的平均指数奖励
+ def motion_global_body_angular_velocity_error_exp(
+     env: ManagerBasedRLEnv, command_name: str, std: float, body_names: list[str] | None = None
+ ) -> torch.Tensor:
+@@ -88,6 +97,7 @@ def motion_global_body_angular_velocity_error_exp(
+     return torch.exp(-error.mean(-1) / std**2)
+ 
+ 
++# 足底接触时间判定：利用接触传感器，衡量脚底腾空(First air)与触地时长，给予合理的物理步态激励
+ def feet_contact_time(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, threshold: float) -> torch.Tensor:
+     contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+     first_air = contact_sensor.compute_first_air(env.step_dt, env.physics_dt)[:, sensor_cfg.body_ids]
+diff --git a/source/wbc_robot/wbc_robot/utils/motion_dataloader.py b/source/wbc_robot/wbc_robot/utils/motion_dataloader.py
+index 02014c4..445e01a 100644
+--- a/source/wbc_robot/wbc_robot/utils/motion_dataloader.py
++++ b/source/wbc_robot/wbc_robot/utils/motion_dataloader.py
+@@ -1,8 +1,7 @@
+-"""Motion dataloader for loading and sampling motion data from NPZ files.
++"""从 NPZ 文件加载和采样运动数据的运动数据加载器。
+ 
+-This module provides a PyTorch-style dataloader with weighted sampling support
+-and efficient vectorized batch indexing for multi-motion tracking in
+-reinforcement learning environments.
++该模块提供了一个类似 PyTorch 的数据加载器，支持加权采样，
++并在强化学习环境中为多运动跟踪提供高效的向量化批处理索引。
+ """
+ 
+ import bisect
+@@ -16,47 +15,47 @@ from wbc_robot.utils.motion_dataset import Motion_Dataset, Unify_Motion_Dataset
+ 
+ 
+ class Motion_Dataloader:
+-    """Dataloader for sampling motion clips with optional weighted sampling.
++    """用于采样运动片段的数据加载器，支持可选的加权采样。
+ 
+-    Uses efficient concatenation + offset indexing for vectorized batch access.
+-    All motion sequences are concatenated into single tensors with offset tracking.
++    使用高效的拼接 + 偏移量索引以实现向量化的批处理访问。
++    所有运动序列被拼接到单个张量中，并跟踪偏移量。
+ 
+-    Args:
+-        dataset: Motion_Dataset instance
+-        device: Device to load tensors on
++    参数:
++        dataset: Motion_Dataset 实例
++        device: 加载张量的设备
+ 
+-    Example:
++    示例:
+         >>> dataset = Motion_Dataset(...)
+         >>> dataloader = Motion_Dataloader(dataset)
+-        >>> # Direct buffer access with global indexing
++        >>> # 通过全局索引直接访问缓冲区
+         >>> motion_ids = torch.tensor([0, 1, 0, 2])
+         >>> time_steps = torch.tensor([10, 20, 15, 5])
+         >>> global_indices = dataloader.motion_offsets[motion_ids] + time_steps
+         >>> joint_pos = dataloader.motion_buffer.joint_pos[global_indices]
+-        >>> # Uniform sampling
++        >>> # 均匀采样
+         >>> indices = dataloader.sample(n=10)
+-        >>> # Weighted sampling
++        >>> # 加权采样
+         >>> weights = compute_weights(...)
+         >>> indices = dataloader.sample(n=10, weights=weights)
+     """
+ 
+     class MotionBuffer:
+-        """Internal class for storing concatenated motion data tensors.
+-
+-        This class encapsulates all motion data in a single contiguous memory layout
+-        for efficient GPU-accelerated batch indexing.
+-
+-        Attributes:
+-            joint_pos: [total_frames, num_joints] - Joint positions
+-            joint_vel: [total_frames, num_joints] - Joint velocities
+-            body_pos_w: [total_frames, num_bodies, 3] - Body positions (world frame)
+-            body_quat_w: [total_frames, num_bodies, 4] - Body quaternions (world frame)
+-            body_lin_vel_w: [total_frames, num_bodies, 3] - Body linear velocities
+-            body_ang_vel_w: [total_frames, num_bodies, 3] - Body angular velocities
++        """用于存储拼接后的运动数据张量的内部类。
++
++        此类将所有运动数据封装在单个连续内存布局中，
++        以实现高效的 GPU 加速批处理索引。
++
++        属性:
++            joint_pos: [总帧数, 关节数] - 关节位置
++            joint_vel: [总帧数, 关节数] - 关节速度
++            body_pos_w: [总帧数, 刚体数, 3] - 刚体位置 (世界坐标系)
++            body_quat_w: [总帧数, 刚体数, 4] - 刚体四元数 (世界坐标系)
++            body_lin_vel_w: [总帧数, 刚体数, 3] - 刚体线速度
++            body_ang_vel_w: [总帧数, 刚体数, 3] - 刚体角速度
+         """
+ 
+         def __init__(self, body_indexes: Sequence[int]):
+-            """Initialize empty motion buffer."""
++            """初始化空的运动缓冲区。"""
+             self.joint_pos: torch.Tensor | None = None
+             self.joint_vel: torch.Tensor | None = None
+             self._body_pos_w: torch.Tensor | None = None
+@@ -90,15 +89,15 @@ class Motion_Dataloader:
+         rank: int = 0,
+         enable_data_split: bool = False,
+     ):
+-        """Initialize the dataloader with concatenated sequences.
+-
+-        Args:
+-            dataset: Motion_Dataset instance
+-            body_indexes: Indices of bodies to extract
+-            device: Device to load tensors on
+-            world_size: Total number of distributed processes (default: 1 for single process)
+-            rank: Current process rank (default: 0)
+-            enable_data_split: Whether to enable distributed data sharding (default: False)
++        """使用拼接的时间序列初始化数据加载器。
++
++        参数:
++            dataset: Motion_Dataset 实例
++            body_indexes: 要提取的刚体索引
++            device: 加载张量的设备
++            world_size: 分布式进程的总数 (默认: 1 单进程)
++            rank: 当前进程排名 (默认: 0)
++            enable_data_split: 是否启用分布式数据分片 (默认: False)
+         """
+         self.dataset = dataset
+         self.device = device
+@@ -108,56 +107,56 @@ class Motion_Dataloader:
+ 
+         self._body_indexes = body_indexes
+ 
+-        # Initialize motion buffer
++        # 初始化运动缓冲区
+         self.motion_buffer = self.MotionBuffer(self._body_indexes)
+ 
+-        # Motion metadata (will be populated in _preload_and_concatenate)
+-        self.motion_lengths: torch.Tensor  # [num_motions_local], length of each motion in this rank
+-        self.motion_offsets: torch.Tensor  # [num_motions_local], starting index of each motion
+-        self.motion_fps: torch.Tensor  # [num_motions_local], FPS of each motion
+-        self.time_step_total: int  # Total number of frames in this rank's buffer
+-        self.num_motions: int  # Number of motions assigned to this rank
++        # 运动元数据 (将在 _preload_and_concatenate 中填充)
++        self.motion_lengths: torch.Tensor  # [当前rank的运动数]，当前rank中每个运动的长度
++        self.motion_offsets: torch.Tensor  # [当前rank的运动数]，每个运动的起始索引
++        self.motion_fps: torch.Tensor  # [当前rank的运动数]，每个运动的 FPS
++        self.time_step_total: int  # 当前rank缓冲区的总帧数
++        self.num_motions: int  # 分配给当前rank的运动数量
+ 
+-        # Distributed data tracking
+-        self.start_motion_idx: int = 0  # Start motion index in global dataset
+-        self.end_motion_idx: int = 0  # End motion index in global dataset
+-        self.global_num_motions: int = len(dataset)  # Total motions in dataset
++        # 分布式数据跟踪
++        self.start_motion_idx: int = 0  # 全局数据集中的起始运动索引
++        self.end_motion_idx: int = 0  # 全局数据集中的结束运动索引
++        self.global_num_motions: int = len(dataset)  # 数据集中的总运动数
+ 
+         print(f"[Motion_Dataloader] Loading and concatenating motions for rank {self.rank}/{self.world_size}...")
+ 
+-        # Load all motions and concatenate into single tensors
++        # 加载所有运动并将其拼接到单个张量中
+         self._preload_and_concatenate()
+ 
+         print(f"[Motion_Dataloader] Rank {self.rank} initialization complete. Total frames: {self.time_step_total}")
+ 
+     def _preload_and_concatenate(self):
+-        """Preload all motions and concatenate into single tensors with offset tracking.
++        """预加载所有运动并通过偏移量跟踪拼接到单个张量中。
+ 
+-        This method loads all motion data upfront and concatenates sequences along
+-        the time dimension. Each motion's starting position is tracked in offsets.
++        此方法预先加载所有运动数据，并沿时间维度拼接序列。
++        每个运动的起始位置记录在 offsets 中。
+ 
+-        For distributed training: if enable_data_split=True, this will partition motions
+-        across ranks based on frame count to balance load.
++        对于分布式训练：如果 enable_data_split=True，则会根据帧数划分各个 rank
++        以平衡负载。
+ 
+-        Memory-efficient: No padding, only raw data storage.
++        内存高效：无需填充，仅存储原始数据。
+         """
+-        # === Step 1: Load motion metadata for all motions (no GPU transfer yet) ===
++        # === 步骤 1: 加载所有运动的运动元数据 (暂不传输至 GPU) ===
+         all_motion_lengths = []
+         for i in range(self.global_num_motions):
+             sample = self.dataset[i]
+             all_motion_lengths.append(sample["length"])
+ 
+-        # === Step 2: Determine which motions to load for this rank ===
++        # === 步骤 2: 确定当前 rank 要加载的运动 ===
+         if self.enable_data_split and self.world_size > 1:
+             self._compute_rank_motion_indices(all_motion_lengths)
+         else:
+-            # Single process or data split disabled: load all motions
++            # 单进程或禁用数据分片：加载所有运动
+             self.start_motion_idx = 0
+             self.end_motion_idx = self.global_num_motions
+ 
+         self.num_motions = self.end_motion_idx - self.start_motion_idx
+ 
+-        # === Step 3: Load and concatenate only this rank's motions ===
++        # === 步骤 3: 仅加载并拼接当前 rank 的运动 ===
+         data_lists = {
+             "joint_pos": [],
+             "joint_vel": [],
+@@ -169,19 +168,19 @@ class Motion_Dataloader:
+         lengths = []
+         fps_list = []
+ 
+-        # Load motions assigned to this rank
++        # 加载分配给当前 rank 的运动
+         for i in range(self.start_motion_idx, self.end_motion_idx):
+             sample = self.dataset[i]
+             motion_data = sample["motion"]
+ 
+-            # Append to lists
++            # 添加到列表中
+             for key in data_lists.keys():
+                 data_lists[key].append(torch.tensor(motion_data[key], dtype=torch.float32, device=self.device))
+ 
+             lengths.append(sample["length"])
+             fps_list.append(sample["fps"])
+ 
+-        # Concatenate all sequences in this rank's buffer
++        # 连接当前 rank 缓冲区的所有序列
+         self.motion_buffer.joint_pos = torch.cat(data_lists["joint_pos"], dim=0)
+         self.motion_buffer.joint_vel = torch.cat(data_lists["joint_vel"], dim=0)
+         self.motion_buffer._body_pos_w = torch.cat(data_lists["body_pos_w"], dim=0)
+@@ -189,16 +188,16 @@ class Motion_Dataloader:
+         self.motion_buffer._body_lin_vel_w = torch.cat(data_lists["body_lin_vel_w"], dim=0)
+         self.motion_buffer._body_ang_vel_w = torch.cat(data_lists["body_ang_vel_w"], dim=0)
+ 
+-        # Compute local offsets for this rank (relative to rank's buffer)
++        # 计算当前 rank 的局部偏移量 (相对于当前 rank 的缓冲区)
+         self.motion_lengths = torch.tensor(lengths, dtype=torch.long, device=self.device)
+         self.motion_offsets = torch.cat(
+             [torch.tensor([0], device=self.device), torch.cumsum(self.motion_lengths, dim=0)[:-1]], dim=0
+         )
+ 
+-        # Store FPS for this rank
++        # 存储当前 rank 的 FPS
+         self.motion_fps = torch.tensor(fps_list, dtype=torch.float32, device=self.device)
+ 
+-        # Store total buffer length for this rank
++        # 存储当前 rank 缓冲区的总长度
+         self.time_step_total = self.motion_buffer.joint_pos.shape[0]
+ 
+         print(f"[Motion_Dataloader] Rank {self.rank} concatenated tensors:")
+@@ -211,24 +210,23 @@ class Motion_Dataloader:
+         print(f"  - motion_lengths range: [{self.motion_lengths.min()}, {self.motion_lengths.max()}]")
+ 
+     def _compute_rank_motion_indices(self, all_motion_lengths: list[int]):
+-        """Compute which motion indices are assigned to this rank.
++        """计算分配给当前 rank 的运动索引。
+ 
+-        Strategy: Assign complete motions to ranks such that each rank gets roughly
+-        equal number of frames. Motions are never split across ranks.
+-        Ensures deterministic, non-overlapping, continuous ranges across all ranks.
++        策略：为 rank 分配完整的运动，使命每个 rank 获得大致相等的帧数。
++        运动绝不会跨 rank 分割。保证跨所有 rank 是确定、非重叠且连续的范围。
+ 
+-        Args:
+-            all_motion_lengths: List of frame counts for all motions in dataset
++        参数:
++            all_motion_lengths: 数据集中所有运动的帧数列表
+         """
+         total_frames = sum(all_motion_lengths)
+-        target_frames_per_rank = math.ceil(total_frames / self.world_size) + 1  # for safety, when world_size=1
++        target_frames_per_rank = math.ceil(total_frames / self.world_size) + 1  # 为了安全，在 world_size=1 时
+ 
+         # cumsum
+         cumulative_lengths = list(accumulate(all_motion_lengths))
+         cur_rank_tg_start_frames = self.rank * target_frames_per_rank
+         cur_rank_tg_end_frames = (self.rank + 1) * target_frames_per_rank
+ 
+-        # find motion index
++        # 查找运动索引
+         start_motion_idx = bisect.bisect_left(cumulative_lengths.copy(), cur_rank_tg_start_frames)
+         end_motion_idx = bisect.bisect_right(cumulative_lengths.copy(), cur_rank_tg_end_frames)
+         self.start_motion_idx = start_motion_idx
+@@ -243,99 +241,99 @@ class Motion_Dataloader:
+         print(f"  - Assigned frames: {rank_total_frames}")
+ 
+     def get_motion_length(self, motion_id: int) -> int:
+-        """Get length of a specific motion."""
++        """获取特定运动的长度。"""
+         return self.motion_lengths[motion_id].item()
+ 
+     def get_motion_fps(self, motion_id: int) -> float:
+-        """Get FPS of a specific motion."""
++        """获取特定运动的 FPS。"""
+         return self.motion_fps[motion_id].item()
+ 
+     def sample(self, n: int, weights: torch.Tensor | list | None = None) -> torch.Tensor:
+-        """Sample n motion indices with optional weights.
++        """利用可选权重对 n 个运动索引进行采样。
+ 
+-        Args:
+-            n: Number of motion clips to sample
+-            weights: Optional [num_motions] tensor or list of sampling weights.
+-                    If None, uniform sampling is used.
+-                    Weights will be normalized internally.
++        参数:
++            n: 要采样的运动片段数量
++            weights: 可选的 [num_motions] 权重张量或列表。
++                    如果为 None，则使用均匀采样。
++                    权重将在内部归一化。
+ 
+-        Returns:
+-            motion_indices: Tensor[n], sampled motion indices in dataset
++        返回:
++            motion_indices: 形状为 Tensor[n]，采样得到的数据集中的运动索引。
+ 
+-        Example:
+-            # Uniform sampling
++        示例:
++            # 均匀采样
+             indices = dataloader.sample(10)
+ 
+-            # Weighted sampling based on quantity
++            # 基于数量的加权采样
+             weights = [0.85 if q==1 else 0.10 if q==2 else 0.05
+                       for q in dataset.quantities]
+             indices = dataloader.sample(10, weights=weights)
+ 
+-            # Custom adaptive sampling
++            # 自定义自适应采样
+             weights = curriculum_weights * difficulty_scores * diversity_penalty
+             indices = dataloader.sample(10, weights=weights)
+         """
+         if weights is None:
+-            # Uniform sampling
++            # 均匀采样
+             weights = torch.ones(self.num_motions, device=self.device)
+         else:
+-            # Convert to tensor if needed
++            # 如果需要则转换为张量
+             if not isinstance(weights, torch.Tensor):
+                 weights = torch.tensor(weights, dtype=torch.float32, device=self.device)
+             else:
+                 weights = weights.to(self.device)
+ 
+-            # Validate shape
++            # 验证形状
+             if weights.shape[0] != self.num_motions:
+                 raise ValueError(f"Weights shape mismatch: expected [{self.num_motions}], got {weights.shape}")
+ 
+-        # Ensure positive weights
++        # 确保权重为正数
+         weights = torch.clamp(weights, min=1e-8)
+ 
+-        # Normalize
++        # 归一化
+         weights = weights / weights.sum()
+ 
+-        # Sample
++        # 采样
+         motion_indices = torch.multinomial(weights, n, replacement=True)
+ 
+         return motion_indices
+ 
+ 
+ class Unify_Motion_Dataloader(Motion_Dataloader):
+-    """Extended dataloader for paired robot and SMPL-X motion data.
++    """配对的机器人和 SMPL-X 运动数据的扩展数据加载器。
+ 
+-    Inherits from Motion_Dataloader and adds support for:
+-    - smplx_pose_body: [total_frames, 126] - SMPL-X body pose flattened
+-    - robot_keypoints_trans: [total_frames, 15] - Robot keypoints translation flattened
+-    - robot_keypoints_rot: [total_frames, 30] - Robot keypoints rotation in 6D flattened
++    继承自 Motion_Dataloader 并添加对以下数据的支持:
++    - smplx_pose_body: [总帧数, 126] - 扁平化的 SMPL-X 单个身体姿态
++    - robot_keypoints_trans: [总帧数, 15] - 扁平化的机器人关键点平移
++    - robot_keypoints_rot: [总帧数, 30] - 扁平化的 6D 机器人关键点旋转
+ 
+-    Note: Extended keys are already flattened in Unify_Motion_Dataset.__getitem__()
++    注意: 扩展键的数据在 Unify_Motion_Dataset.__getitem__() 中已经扁平化
+ 
+-    Args:
+-        dataset: Unify_Motion_Dataset instance (paired robot + SMPL-X)
+-        body_indexes: Indices for filtering robot body data
+-        device: Device to load tensors on
++    参数:
++        dataset: Unify_Motion_Dataset 实例 (配对的机器人 + SMPL-X 数据)
++        body_indexes: 用于过滤机器人刚体数据的索引
++        device: 加载张量的设备
+ 
+-    Example:
++    示例:
+         >>> dataset = Unify_Motion_Dataset(robot_map, smplx_map, robot_name="g1")
+         >>> dataloader = Unify_Motion_Dataloader(dataset, body_indexes=[0, 1, 2, ...], device="cuda")
+-        >>> # Use inherited sampling method
++        >>> # 使用继承的采样方法
+         >>> indices = dataloader.sample(n=32)
+         >>> time_steps = torch.tensor([10, 20, 15, ...], device="cuda")
+         >>> global_indices = dataloader.motion_offsets[indices] + time_steps
+-        >>> # Access all data including extended keys
++        >>> # 访问所有数据（包括扩展键的数据）
+         >>> joint_pos = dataloader.motion_buffer.joint_pos[global_indices]
+         >>> smplx_data = dataloader.motion_buffer.smplx_pose_body[global_indices]
+         >>> keypoint_trans = dataloader.motion_buffer.robot_keypoints_trans[global_indices]
+     """
+ 
+     class UnifyMotionBuffer(Motion_Dataloader.MotionBuffer):
+-        """Extended MotionBuffer with SMPL-X and extended data support.
++        """带有 SMPL-X 和扩展数据支持的扩展运动缓冲区。
+ 
+-        Inherits all robot motion buffers from parent and adds:
+-        - smplx_pose_body: SMPL-X body pose data
+-        - robot_keypoints_trans: Robot keypoints translation
+-        - robot_keypoints_rot: Robot keypoints rotation in 6D
++        继承自父类的所有机器人运动缓冲区并新增：
++        - smplx_pose_body: SMPL-X 身体姿态数据
++        - robot_keypoints_trans: 机器人关键点平移
++        - robot_keypoints_rot: 6D 的机器人关键点旋转
+         """
+ 
+         def __init__(self, body_indexes: Sequence[int]):
+@@ -346,17 +344,17 @@ class Unify_Motion_Dataloader(Motion_Dataloader):
+ 
+         @property
+         def smplx_pose_body(self) -> torch.Tensor | None:
+-            """SMPL-X body pose in 6D representation."""
++            """SMPL-X 6D 形式的身体姿态数据。"""
+             return self._smplx_pose_body
+ 
+         @property
+         def robot_keypoints_trans(self) -> torch.Tensor | None:
+-            """Robot keypoints SE3 translation data."""
++            """机器人关键点 SE3 平移数据。"""
+             return self._robot_keypoints_trans
+ 
+         @property
+         def robot_keypoints_rot(self) -> torch.Tensor | None:
+-            """Robot keypoints SE3 rotation in 6D representation."""
++            """机器人关键点 6D 形式中的 SE3 旋转数据。"""
+             return self._robot_keypoints_rot
+ 
+     def __init__(
+@@ -368,15 +366,15 @@ class Unify_Motion_Dataloader(Motion_Dataloader):
+         rank: int = 0,
+         enable_data_split: bool = False,
+     ):
+-        """Initialize Unify_Motion_Dataloader.
+-
+-        Args:
+-            dataset: Unify_Motion_Dataset instance with paired data
+-            body_indexes: Sequence of body indices for filtering
+-            device: Device to load tensors on
+-            world_size: Total number of distributed processes (default: 1 for single process)
+-            rank: Current process rank (default: 0)
+-            enable_data_split: Whether to enable distributed data sharding (default: False)
++        """初始化 Unify_Motion_Dataloader。
++
++        参数:
++            dataset: 含有配对数据的 Unify_Motion_Dataset 实例
++            body_indexes: 刚体过滤索引序列
++            device: 加载张量的设备
++            world_size: 分布式进程的总数 (默认: 1 单进程)
++            rank: 当前进程排名 (默认: 0)
++            enable_data_split: 是否启用分布式数据分片 (默认: False)
+         """
+         self.dataset = dataset
+         self.device = device
+@@ -386,24 +384,24 @@ class Unify_Motion_Dataloader(Motion_Dataloader):
+ 
+         self._body_indexes = body_indexes
+ 
+-        # Use extended buffer class
++        # 使用扩展的缓冲区类
+         self.motion_buffer = self.UnifyMotionBuffer(self._body_indexes)
+ 
+-        # Initialize metadata (will be populated in _preload_and_concatenate)
++        # 运动元数据 (将在 _preload_and_concatenate 中填充)
+         self.motion_lengths: torch.Tensor
+         self.motion_offsets: torch.Tensor
+         self.motion_fps: torch.Tensor
+         self.time_step_total: int
+         self.num_motions: int
+ 
+-        # Distributed data tracking
+-        self.start_motion_idx: int = 0  # Start motion index in global dataset
+-        self.end_motion_idx: int = 0  # End motion index in global dataset
+-        self.global_num_motions: int = len(dataset)  # Total motions in dataset
++        # 分布式数据跟踪
++        self.start_motion_idx: int = 0  # 全局数据集中的起始运动索引
++        self.end_motion_idx: int = 0  # 全局数据集中的结束运动索引
++        self.global_num_motions: int = len(dataset)  # 数据集中的总运动数
+ 
+         print(f"[Unify_Motion_Dataloader] Loading and concatenating motions for rank {self.rank}/{self.world_size}...")
+ 
+-        # Load all motions and concatenate
++        # 加载所有运动并拼接
+         self._preload_and_concatenate()
+ 
+         print(
+@@ -411,30 +409,30 @@ class Unify_Motion_Dataloader(Motion_Dataloader):
+         )
+ 
+     def _preload_and_concatenate(self) -> None:
+-        """Preload all paired motions and concatenate with extended data handling.
++        """预加载所有配对的运动并进行含有扩展数据处理的拼接。
+ 
+-        Extends parent method to also handle SMPL-X and extended robot data.
+-        For distributed training: if enable_data_split=True, this will partition motions
+-        across ranks based on frame count to balance load.
++        扩展了父类方法以处理 SMPL-X 以及机器人扩展数据。
++        对于分布式训练：如果 enable_data_split=True，则会基于帧数
++        跨多个 rank 分配运动以平衡负载。
+         """
+-        # === Step 1: Load motion metadata for all motions (no GPU transfer yet) ===
++        # === 步骤 1: 加载所有运动的运动元数据 (暂不传输至 GPU) ===
+         all_motion_lengths = []
+         for i in range(self.global_num_motions):
+             sample = self.dataset[i]
+             all_motion_lengths.append(sample["length"])
+ 
+-        # === Step 2: Determine which motions to load for this rank ===
++        # === 步骤 2: 确定当前 rank 要加载的运动 ===
+         if self.enable_data_split and self.world_size > 1:
+             self._compute_rank_motion_indices(all_motion_lengths)
+         else:
+-            # Single process or data split disabled: load all motions
++            # 单进程或禁用数据分片：加载所有运动
+             self.start_motion_idx = 0
+             self.end_motion_idx = self.global_num_motions
+ 
+         self.num_motions = self.end_motion_idx - self.start_motion_idx
+ 
+-        # === Step 3: Load and concatenate only this rank's motions ===
+-        # Base data lists (inherited from parent)
++        # === 步骤 3: 仅加载并拼接当前 rank 的运动 ===
++        # 基础数据列表 (继承自父类)
+         data_lists = {
+             "joint_pos": [],
+             "joint_vel": [],
+@@ -444,8 +442,8 @@ class Unify_Motion_Dataloader(Motion_Dataloader):
+             "body_ang_vel_w": [],
+         }
+ 
+-        # Extended data lists for SMPL-X and robot keypoints
+-        # Note: These are already flattened by Unify_Motion_Dataset
++        # 用于 SMPL-X 和机器人关键点的扩展数据列表
++        # 注意: 数据由 Unify_Motion_Dataset 经过了扁平化处理
+         extended_lists = {
+             "smplx_pose_body": [],
+             "robot_keypoints_trans": [],
+@@ -455,19 +453,19 @@ class Unify_Motion_Dataloader(Motion_Dataloader):
+         lengths = []
+         fps_list = []
+ 
+-        # Load motions assigned to this rank
++        # 加载分配给当前 rank 的运动
+         for i in range(self.start_motion_idx, self.end_motion_idx):
+             item = self.dataset[i]
+             robot_motion = item["motion"]
+             robot_len = item["length"]
+             robot_item = item
+ 
+-            # Load base data (reuse from Motion_Dataset interface)
++            # 加载基础数据 (复用 Motion_Dataset 接口)
+             for key in data_lists.keys():
+                 data_lists[key].append(torch.tensor(robot_motion[key], dtype=torch.float32, device=self.device))
+ 
+-            # Load extended data (must exist from extend_datasets.py preprocessing)
+-            # Note: Data is already flattened by Unify_Motion_Dataset.__getitem__()
++            # 加载扩展数据 (必须经过 extend_datasets.py 预处理生成)
++            # 注意: 数据由 Unify_Motion_Dataset 经过了扁平化处理
+             for ext_key in extended_lists.keys():
+                 extended_lists[ext_key].append(
+                     torch.tensor(robot_motion[ext_key], dtype=torch.float32, device=self.device)
+@@ -476,7 +474,7 @@ class Unify_Motion_Dataloader(Motion_Dataloader):
+             lengths.append(robot_len)
+             fps_list.append(robot_item["fps"])
+ 
+-        # Concatenate base data (robot motion)
++        # 拼接基础数据 (机器人运动)
+         self.motion_buffer.joint_pos = torch.cat(data_lists["joint_pos"], dim=0)
+         self.motion_buffer.joint_vel = torch.cat(data_lists["joint_vel"], dim=0)
+         self.motion_buffer._body_pos_w = torch.cat(data_lists["body_pos_w"], dim=0)
+@@ -484,12 +482,12 @@ class Unify_Motion_Dataloader(Motion_Dataloader):
+         self.motion_buffer._body_lin_vel_w = torch.cat(data_lists["body_lin_vel_w"], dim=0)
+         self.motion_buffer._body_ang_vel_w = torch.cat(data_lists["body_ang_vel_w"], dim=0)
+ 
+-        # Concatenate extended data (must exist from extend_datasets.py preprocessing)
++        # 拼接扩展数据 (必须经过 extend_datasets.py 预处理生成)
+         self.motion_buffer._smplx_pose_body = torch.cat(extended_lists["smplx_pose_body"], dim=0)
+         self.motion_buffer._robot_keypoints_trans = torch.cat(extended_lists["robot_keypoints_trans"], dim=0)
+         self.motion_buffer._robot_keypoints_rot = torch.cat(extended_lists["robot_keypoints_rot"], dim=0)
+ 
+-        # Compute motion metadata
++        # 计算运动元数据
+         self.motion_lengths = torch.tensor(lengths, dtype=torch.long, device=self.device)
+         self.motion_offsets = torch.cat(
+             [torch.tensor([0], dtype=torch.long, device=self.device), torch.cumsum(self.motion_lengths, dim=0)[:-1]],
+@@ -498,7 +496,7 @@ class Unify_Motion_Dataloader(Motion_Dataloader):
+         self.motion_fps = torch.tensor(fps_list, dtype=torch.float32, device=self.device)
+         self.time_step_total = self.motion_buffer.joint_pos.shape[0]
+ 
+-        # Print buffer info
++        # 打印缓冲区信息
+         print(f"[Unify_Motion_Dataloader] Rank {self.rank} concatenated tensors:")
+         print(f"  - Motion indices: [{self.start_motion_idx}, {self.end_motion_idx})")
+         print(f"  - Number of motions: {self.num_motions}")
+diff --git a/source/wbc_robot/wbc_robot/utils/motion_dataset.py b/source/wbc_robot/wbc_robot/utils/motion_dataset.py
+index 283fbc2..3f7ce1d 100644
+--- a/source/wbc_robot/wbc_robot/utils/motion_dataset.py
++++ b/source/wbc_robot/wbc_robot/utils/motion_dataset.py
+@@ -1,7 +1,7 @@
+-"""Motion dataset and dataloader for loading motion data from NPZ files.
++"""用于从 NPZ 文件加载动作数据的动作数据集和数据加载器(Dataloader)。
+ 
+-This module provides PyTorch-based Dataset and DataLoader for loading motion data
+-from NPZ files with support for quantity-based sampling and train/val split.
++该模块提供了基于 PyTorch 的 Dataset 和 DataLoader，用于从 NPZ 文件中
++加载动作数据，并支持基于质量的分层采样以及训练/验证集切分。
+ """
+ 
+ from pathlib import Path
+@@ -14,37 +14,37 @@ from torch.utils.data import Dataset
+ 
+ 
+ class Motion_Dataset(Dataset):
+-    """PyTorch Dataset for loading motion data from NPZ files.
++    """用于从 NPZ 文件加载动作数据的 PyTorch 数据集。
+ 
+-    This dataset loads motion data lazily (on-demand in __getitem__) to avoid
+-    loading all motion data into memory at once, which could cause OOM issues.
++    该数据集采用延迟加载（在 __getitem__ 中按需加载），以避免
++    一次性将所有动作数据加载到内存中可能导致的 OOM（内存溢出）问题。
+ 
+-    Args:
+-        dataset_dirs: List of dataset directory paths. Each should follow the structure:
++    参数:
++        dataset_dirs: 数据集目录路径列表。每个目录及其后续应遵循以下结构:
+             ./datasets/npz_datasets/{dataset_name}/{robot_name}/
+-        robot_name: Name of the robot (e.g., "g1").
+-        splits: List of dataset splits corresponding to each dataset_dir.
+-            Must have the same length as dataset_dirs. Each element can be:
+-            - A string: single split name (e.g., "train", "val", "walk_subset")
+-            - A list of strings: multiple splits to combine (e.g., ["train", "walk_subset"])
+-
+-    Example:
+-        >>> # Single split per dataset
++        robot_name: 机器人名称 (例如 "g1")。
++        splits: 与每个 dataset_dir 对应的数据集切分列表。
++            长度必须与 dataset_dirs 相同。每个元素可以是:
++            - 字符串: 单个切分名称 (例如 "train", "val", "walk_subset")
++            - 字符串列表: 需要合并的多个切分 (例如 ["train", "walk_subset"])
++
++    示例:
++        >>> # 每个数据集单个切分
+         >>> dataset = Motion_Dataset(
+         ...     dataset_dirs=["./datasets/npz_datasets/LAFAN1_Retargeting_Dataset"], robot_name="g1", splits=["train"]
+         ... )
+-        >>> # Multiple datasets with different splits
++        >>> # 多个数据集和不同切分
+         >>> dataset = Motion_Dataset(
+         ...     dataset_dirs=[
+         ...         "./datasets/npz_datasets/LAFAN1_Retargeting_Dataset",
+         ...         "./datasets/npz_datasets/LAFAN1_Retargeting_Dataset",
+         ...     ],
+         ...     robot_name="g1",
+-        ...     splits=["train", ["train", "walk_subset"]],  # Second dataset combines two splits
++        ...     splits=["train", ["train", "walk_subset"]],  # 第二个数据集合并了两个切分
+         ... )
+-        >>> print(f"Dataset size: {len(dataset)}")
++        >>> print(f"数据集大小: {len(dataset)}")
+         >>> sample = dataset[0]
+-        >>> print(f"Motion shape: {sample['joint_pos'].shape}")
++        >>> print(f"动作形状: {sample['joint_pos'].shape}")
+     """
+ 
+     def __init__(
+@@ -54,25 +54,25 @@ class Motion_Dataset(Dataset):
+         splits: list[str | list[str]],
+         shuffle_seed: int = 42,
+     ):
+-        """Initialize the Motion_Dataset.
+-
+-        Args:
+-            dataset_dirs: List of dataset directory paths.
+-            robot_name: Robot name.
+-            splits: List of dataset splits, must be the same length as dataset_dirs.
+-                Each element corresponds to the dataset at the same index in dataset_dirs.
+-                Can be a string (single split) or list of strings (multiple splits to combine).
+-
+-        Raises:
+-            ValueError: If splits and dataset_dirs have different lengths.
+-            FileNotFoundError: If dataset directory or info file (info.yaml/info.yml) doesn't exist.
++        """初始化 Motion_Dataset。
++
++        参数:
++            dataset_dirs: 数据集目录路径列表。
++            robot_name: 机器人名称。
++            splits: 数据集切分列表，长度必须与 dataset_dirs 相同。
++                每个元素对应于 dataset_dirs 中同等索引的数据集。
++                可以是字符串（单个切分）或字符串列表（要合并的多个切分）。
++
++        引发:
++            ValueError: 如果 splits 和 dataset_dirs 长度不同。
++            FileNotFoundError: 如果数据集目录或信息文件（info.yaml/info.yml）不存在。
+         """
+         super().__init__()
+ 
+-        # Validate that splits and dataset_dirs have the same length
++        # 检查 splits 和 dataset_dirs 长度是否一致
+         if len(splits) != len(dataset_dirs):
+             raise ValueError(
+-                f"Length of splits ({len(splits)}) must match length of dataset_dirs ({len(dataset_dirs)})"
++                f"splits 的长度 ({len(splits)}) 必须匹配 dataset_dirs 的长度 ({len(dataset_dirs)})"
+             )
+ 
+         self.dataset_dirs = [Path(d).expanduser().resolve() for d in dataset_dirs]
+@@ -80,31 +80,31 @@ class Motion_Dataset(Dataset):
+         self.splits = splits
+         self.shuffle_seed = shuffle_seed
+ 
+-        # Storage for NPZ file paths and metadata
++        # 用于存储 NPZ 文件路径和元数据
+         self.npz_paths: list[Path] = []
+-        self.quantities: list[int] = []  # Quality/difficulty of each motion clip
+-        self.motion_names: list[str] = []  # Base name of each motion
+-        self.dataset_sources: list[str] = []  # Track which dataset each motion comes from
++        self.quantities: list[int] = []  # 每个动作片段的质量/难度评级
++        self.motion_names: list[str] = []  # 每个动作的基础名称
++        self.dataset_sources: list[str] = []  # 记录每个动作来自哪个数据集
+ 
+-        # Load dataset information and collect NPZ paths
++        # 加载数据集信息并收集 NPZ 路径
+         self._load_dataset_info()
+         self._random_motions()
+ 
+-        print(f"[Motion_Dataset] Loaded {len(self.npz_paths)} motion clips from {len(self.dataset_dirs)} dataset(s)")
+-        print(f"[Motion_Dataset] Quantity distribution: {self._get_quantity_stats()}")
++        print(f"[Motion_Dataset] 从 {len(self.dataset_dirs)} 个数据集中加载了 {len(self.npz_paths)} 个动作片段")
++        print(f"[Motion_Dataset] 难度分布: {self._get_quantity_stats()}")
+ 
+     def _load_dataset_info(self):
+-        """Load dataset information from info.yaml or info.yml files and collect NPZ paths."""
++        """从 info.yaml 或 info.yml 文件加载数据集信息并收集 NPZ 路径。"""
+         for dataset_idx, dataset_dir in enumerate(self.dataset_dirs):
+             split_config = self.splits[dataset_idx]
+ 
+-            # Normalize split_config to always be a list
++            # 规范化 split_config 使其始终为列表
+             if isinstance(split_config, str):
+                 split_names = [split_config]
+             else:
+                 split_names = split_config
+ 
+-            # Try YAML files only (info.yaml or info.yml)
++            # 仅尝试 YAML 文件（info.yaml 或 info.yml）
+             info_path = None
+             for ext in [".yaml", ".yml"]:
+                 candidate_path = dataset_dir / f"info{ext}"
+@@ -114,29 +114,29 @@ class Motion_Dataset(Dataset):
+ 
+             if info_path is None:
+                 raise FileNotFoundError(
+-                    f"Dataset info file not found in {dataset_dir}. Expected: info.yaml or info.yml"
++                    f"在 {dataset_dir} 中未找到数据集信息文件。期望文件名: info.yaml 或 info.yml"
+                 )
+ 
+-            # Load dataset info from YAML
++            # 从 YAML 加载数据集信息
+             with open(info_path) as f:
+                 info = yaml.safe_load(f)
+ 
+             dataset_name = info["dataset"]
+ 
+-            # Process each split in the configuration
++            # 处理配置中的每一个切分 (split)
+             for split in split_names:
+                 split_info = info.get(split, {})
+ 
+                 if not split_info:
+-                    raise ValueError(f"[Motion_Dataset] No '{split}' data in {dataset_name}")
++                    raise ValueError(f"[Motion_Dataset] {dataset_name} 中没有 '{split}' 数据")
+ 
+-                # Construct path to robot-specific NPZ files
++                # 构建特定于机器人的 NPZ 文件夹路径
+                 robot_dir = dataset_dir / self.robot_name
+ 
+                 if not robot_dir.exists():
+-                    raise FileNotFoundError(f"Robot directory not found: {robot_dir}")
++                    raise FileNotFoundError(f"未找到机器人目录: {robot_dir}")
+ 
+-                # Collect NPZ paths for this split
++                # 收集当前切分的 NPZ 路径
+                 for motion_name, quantity in split_info.items():
+                     npz_path = robot_dir / f"{motion_name}.npz"
+ 
+@@ -144,17 +144,17 @@ class Motion_Dataset(Dataset):
+                         self.npz_paths.append(npz_path)
+                         self.quantities.append(quantity)
+                         self.motion_names.append(motion_name)
+-                        # Record source as dataset:split1+split2+... for combined splits
++                        # 将来源记录为 dataset:split1+split2+... (针对合并切分的情况)
+                         split_str = "+".join(split_names) if len(split_names) > 1 else split_names[0]
+                         self.dataset_sources.append(f"{dataset_name}:{split_str}")
+                     else:
+-                        print(f"[Motion_Dataset] Warning: NPZ file not found: {npz_path}")
++                        print(f"[Motion_Dataset] 警告: 未找到 NPZ 文件: {npz_path}")
+ 
+     def _random_motions(self):
+         if self.shuffle_seed is not None:
+-            # get the number of motions
++            # 获取动作数量
+             num_motions = len(self.npz_paths)
+-            # generate a random permutation of indices with fixed seed
++            # 使用固定随机数种子生成排列好的索引
+             gen = torch.Generator().manual_seed(self.shuffle_seed)
+             indices = torch.randperm(num_motions, generator=gen)
+             self.shuffle_indices = indices.tolist()
+@@ -162,10 +162,10 @@ class Motion_Dataset(Dataset):
+             self.shuffle_indices = list(range(len(self.npz_paths)))
+ 
+     def _get_quantity_stats(self) -> dict[int, int]:
+-        """Get statistics of quantity distribution.
++        """获取难度分布统计信息。
+ 
+-        Returns:
+-            Dictionary mapping quantity to count.
++        返回:
++            将难度映射到数量的字典。
+         """
+         stats = {}
+         for q in self.quantities:
+@@ -173,44 +173,44 @@ class Motion_Dataset(Dataset):
+         return stats
+ 
+     def __len__(self) -> int:
+-        """Return the number of motion clips in the dataset.
++        """返回数据集中的动作片段数。
+ 
+-        Returns:
+-            Number of motion clips.
++        返回:
++            动作片段数。
+         """
+         return len(self.npz_paths)
+ 
+     def __getitem__(self, idx: int) -> dict[str, Any]:
+-        """Load and return a single motion clip.
+-
+-        This method loads the NPZ file on-demand to avoid memory issues.
+-
+-        Args:
+-            idx: Index of the motion clip to load.
+-
+-        Returns:
+-            Dictionary containing:
+-                - motion: Dictionary of numpy arrays with motion data:
+-                    - joint_pos: (num_frames, num_joints) joint positions
+-                    - joint_vel: (num_frames, num_joints) joint velocities
+-                    - body_pos_w: (num_frames, num_bodies, 3) body positions
+-                    - body_quat_w: (num_frames, num_bodies, 4) body quaternions
+-                    - body_lin_vel_w: (num_frames, num_bodies, 3) body linear velocities
+-                    - body_ang_vel_w: (num_frames, num_bodies, 3) body angular velocities
+-                - fps: Frames per second of the motion data
+-                - length: Number of frames in the motion
+-                - duration: Duration in seconds
+-                - npz_path: Path to the NPZ file
+-                - motion_name: Name of the motion
+-                - quantity: Quality/difficulty rating (1: best, 2: medium, 3: hard)
+-                - dataset_source: Source dataset and split (format: "dataset_name:split")
++        """加载并返回单个动作片段。
++
++        此方法按需加载 NPZ 文件以避免内存问题。
++
++        参数:
++            idx: 要加载的动作片段的索引。
++
++        返回:
++            包含以下内容的字典:
++                - motion: 包含动作数据的 numpy 数组字典:
++                    - joint_pos: (num_frames, num_joints) 关节位置
++                    - joint_vel: (num_frames, num_joints) 关节速度
++                    - body_pos_w: (num_frames, num_bodies, 3) 刚体位置
++                    - body_quat_w: (num_frames, num_bodies, 4) 刚体四元数
++                    - body_lin_vel_w: (num_frames, num_bodies, 3) 刚体线速度
++                    - body_ang_vel_w: (num_frames, num_bodies, 3) 刚体角速度
++                - fps: 动作数据的每秒帧数
++                - length: 动作的总帧数
++                - duration: 动作持续时间 (秒)
++                - npz_path: NPZ 文件路径
++                - motion_name: 动作名称
++                - quantity: 质量/难度评级 (1: 最好, 2: 中等, 3: 困难)
++                - dataset_source: 来源数据集和切分 (格式: "dataset_name:split")
+         """
+         npz_path = self.npz_paths[self.shuffle_indices[idx]]
+ 
+-        # Load motion data
++        # 加载动作数据
+         data = np.load(npz_path)
+ 
+-        # Extract motion data
++        # 提取动作数据
+         motion = {
+             "joint_pos": data["joint_pos"],
+             "joint_vel": data["joint_vel"],
+@@ -220,7 +220,7 @@ class Motion_Dataset(Dataset):
+             "body_ang_vel_w": data["body_ang_vel_w"],
+         }
+ 
+-        # Add contact data if available
++        # 如果可用，添加接触数据
+         # if "contact" in data:
+         # motion["contact"] = data["contact"]
+ 
+@@ -240,14 +240,14 @@ class Motion_Dataset(Dataset):
+         }
+ 
+     def get_motion_info(self) -> list[dict[str, Any]]:
+-        """Get information about all motions without loading the full data.
++        """获取所有动作的相关信息（不加载完整数据）。
+ 
+-        Returns:
+-            List of dictionaries containing motion metadata.
++        返回:
++            包含动作元数据的字典列表。
+         """
+         info_list = []
+         for i in range(len(self)):
+-            # Load only to get metadata (could be optimized to cache this)
++            # 仅预加载以获取元数据（可优化为缓存）
+             data = np.load(self.npz_paths[i])
+             fps = int(data["fps"][0])
+             length = data["joint_pos"].shape[0]
+@@ -268,10 +268,10 @@ class Motion_Dataset(Dataset):
+         return info_list
+ 
+     def get_statistics(self) -> dict[str, Any]:
+-        """Get dataset statistics.
++        """获取数据集统计信息。
+ 
+-        Returns:
+-            Dictionary containing dataset statistics.
++        返回:
++            包含数据集统计信息的字典。
+         """
+         total_frames = 0
+         total_duration = 0.0
+@@ -300,15 +300,15 @@ class Motion_Dataset(Dataset):
+ 
+ 
+ class Unify_Motion_Dataset(Motion_Dataset):
+-    """Dataset that loads extended motion data with SMPL-X and keypoint information.
++    """加载包含 SMPL-X 和关键点等扩展信息动作的数据集。
+ 
+-    Extends Motion_Dataset to access additional keys in NPZ files that have been
+-    pre-processed by extend_datasets.py with SMPL-X data and robot keypoint SE3 data.
++    继承自 Motion_Dataset 以访问经 extend_datasets.py 处理后的 NPZ
++    文件中的拓展键值（如 SMPL-X 数据和机器人关键点 SE3 数据）。
+ 
+-    Args:
+-        dataset_dirs: List of dataset directory paths
+-        robot_name: robot folder name
+-        splits: List of dataset splits corresponding to each dataset_dir
++    参数:
++        dataset_dirs: 数据集目录路径列表
++        robot_name: 机器人文件夹名称
++        splits: 与每个 dataset_dir 对应的数据集切分列表
+     """
+ 
+     def __init__(
+@@ -317,26 +317,26 @@ class Unify_Motion_Dataset(Motion_Dataset):
+         robot_name: str,
+         splits: list[str | list[str]],
+     ) -> None:
+-        # Simply call parent with same parameters
++        # 直接带着相同参数调用父类
+         super().__init__(
+             dataset_dirs=dataset_dirs,
+             robot_name=robot_name,
+             splits=splits,
+         )
+-        print(f"[Unify_Motion_Dataset] Extended motion dataset loaded with {len(self.npz_paths)} clips")
++        print(f"[Unify_Motion_Dataset] 成功加载扩展动作数据集，共有 {len(self.npz_paths)} 个片段")
+ 
+     def __getitem__(self, idx: int) -> dict[str, Any]:
+-        """Load extended motion data from NPZ file.
++        """从 NPZ 文件加载扩展的动作数据。
+ 
+-        Overrides parent to expose additional extended keys (smplx_pose_body,
+-        robot_keypoints_trans, etc.) when available in the NPZ file.
++        重写了父类方法，当 NPZ 文件中存在额外的拓展键值
++        (smplx_pose_body, robot_keypoints_trans 等) 时将其暴露。
+         """
+         npz_path = self.npz_paths[idx]
+ 
+-        # Load motion data
++        # 加载动作数据
+         data = np.load(npz_path)
+ 
+-        # Extract standard motion data (same as parent)
++        # 提取标准的动作数据 (与父类相同)
+         motion = {
+             "joint_pos": data["joint_pos"],
+             "joint_vel": data["joint_vel"],
+@@ -346,7 +346,7 @@ class Unify_Motion_Dataset(Motion_Dataset):
+             "body_ang_vel_w": data["body_ang_vel_w"],
+         }
+ 
+-        # Add extended keys if available
++        # 若可用则添加拓展键
+         extended_keys = [
+             "smplx_pose_body",
+             "smplx_pose_body_global_rot",
+@@ -358,7 +358,7 @@ class Unify_Motion_Dataset(Motion_Dataset):
+         for key in extended_keys:
+             if key in data:
+                 arr = data[key]
+-                # Flatten last two dimensions for all extended keys
++                # 展平所有扩展键的最后两维
+                 if key in flatten_keys and arr.ndim >= 2:
+                     arr = arr.reshape(arr.shape[0], -1)
+                 motion[key] = arr
