@@ -5,6 +5,7 @@
 
 #include "FSMState.h"
 #include "LinearInterpolator.h"
+#include <stdexcept>
 
 class State_FixStand : public FSMState
 {
@@ -15,6 +16,22 @@ public:
         ts_ = param::config["FSM"]["FixStand"]["ts"].as<std::vector<float>>();
         qs_ = param::config["FSM"]["FixStand"]["qs"].as<std::vector<std::vector<float>>>();
         assert(ts_.size() == qs_.size());
+
+        if(param::auto_mimic_enabled)
+        {
+            if(!FSMStringMap.right.count(param::auto_mimic_state)) {
+                throw std::runtime_error("FSM: Unknown auto_mimic_state " + param::auto_mimic_state);
+            }
+            registered_checks.emplace_back(
+                std::make_pair(
+                    [this]()->bool{
+                        double t = (double)unitree::common::GetCurrentTimeMillisecond() * 1e-3 - t0_;
+                        return t > param::auto_mimic_fixstand_duration;
+                    },
+                    FSMStringMap.right.at(param::auto_mimic_state)
+                )
+            );
+        }
     }
 
     void enter()

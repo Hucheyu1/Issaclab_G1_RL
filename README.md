@@ -171,6 +171,8 @@ cd unitree_rl_lab/deploy/robots/g1_29dof/build
 # 4. Click the mujoco window, and then press 9 to disable the elastic band.
 # 没手柄(让AI写)
 ./g1_ctrl -n lo --auto_mimic
+./g1_ctrl -n lo --auto_mimic  --mimic_state Mimic_GAEMimic_Robot
+# Mimic_GAEMimic_Keypoints  Mimic_GAEMimic_Human  Mimic_GAEMimic_Robot  Mimic_GAEMimic_Policy  Mimic_Multi_G1_Flat Mimic_Dance_102 Mimic_Gangnam_Style Velocity
 ```
 
 
@@ -192,7 +194,7 @@ python scripts/sim2sim.py \
 ```
 
 ```bash
-# 默认是 kinematic 精确回放模式，也就是每一帧直接把 motionfile 的姿态写给 MuJoCo：--mode pd：用电机力矩跟踪关节目标，适合看物理跟踪效果
+# 默认是 kinematic 精确回放模式，也就是每一帧直接把 motionfile 的姿态写给 MuJoCo：--mode pd：用电机力矩跟踪关节目标，适合看物理跟踪效果（不行）
 python scripts/motion2sim.py \
   --motion_file datasets/extend_datasets/lafan1_dataset/g1/train/dance1_subject1.npz
 

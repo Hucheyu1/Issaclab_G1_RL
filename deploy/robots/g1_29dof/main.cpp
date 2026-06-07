@@ -43,13 +43,17 @@ int main(int argc, char** argv)
         spdlog::critical("Unmatched robot type.");
         exit(-1);
     }
+
+    param::auto_mimic_enabled = vm.count("auto_mimic") > 0;
+    param::auto_mimic_state = vm["mimic_state"].as<std::string>();
+    param::auto_mimic_fixstand_duration = vm["fixstand_duration"].as<double>();
     
     // Initialize FSM
     auto fsm = std::make_unique<CtrlFSM>(param::config["FSM"]);
     if(vm.count("auto_mimic"))
     {
-        const auto mimic_state = vm["mimic_state"].as<std::string>();
-        const auto fixstand_duration = vm["fixstand_duration"].as<double>();
+        const auto mimic_state = param::auto_mimic_state;
+        const auto fixstand_duration = param::auto_mimic_fixstand_duration;
         fsm->scheduleTransition(mimic_state, fixstand_duration);
         fsm->start("FixStand");
         std::cout << "Auto sequence: FixStand (" << fixstand_duration << "s) -> " << mimic_state << ".\n";

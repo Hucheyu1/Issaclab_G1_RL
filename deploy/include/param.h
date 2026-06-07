@@ -43,6 +43,9 @@ inline std::filesystem::path bin_path;
 inline std::filesystem::path proj_dir;
 inline std::filesystem::path config_dir;
 inline YAML::Node config;
+inline bool auto_mimic_enabled = false;
+inline double auto_mimic_fixstand_duration = 3.2;
+inline std::string auto_mimic_state = "Mimic_Multi_G1_Flat";
 
 inline std::filesystem::path get_bin_path() {
     std::vector<char> path(1024);

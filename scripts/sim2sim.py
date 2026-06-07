@@ -39,7 +39,7 @@ DEFAULT_G1_XML_CANDIDATES = (
 )
 
 
-G1_JOINT_NAMES = [
+G1_ACTUATOR_JOINT_NAMES = [
     "left_hip_pitch_joint",
     "left_hip_roll_joint",
     "left_hip_yaw_joint",
@@ -71,6 +71,41 @@ G1_JOINT_NAMES = [
     "right_wrist_yaw_joint",
 ]
 
+G1_JOINT_IDS_MAP = [
+    0,
+    6,
+    12,
+    1,
+    7,
+    13,
+    2,
+    8,
+    14,
+    3,
+    9,
+    15,
+    22,
+    4,
+    10,
+    16,
+    23,
+    5,
+    11,
+    17,
+    24,
+    18,
+    25,
+    19,
+    26,
+    20,
+    27,
+    21,
+    28,
+]
+
+# IsaacLab stores policy, observations, actions, and motion NPZ joint arrays in this order.
+G1_JOINT_NAMES = [G1_ACTUATOR_JOINT_NAMES[i] for i in G1_JOINT_IDS_MAP]
+
 
 def _first_existing_path(paths: tuple[Path, ...]) -> Path:
     for path in paths:
@@ -98,7 +133,7 @@ def _build_g1_arrays() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     damping_7520_22 = 2.0 * damping_ratio * armature_7520_22 * natural_freq
     damping_4010 = 2.0 * damping_ratio * armature_4010 * natural_freq
 
-    default_pos = {name: 0.0 for name in G1_JOINT_NAMES}
+    default_pos = {name: 0.0 for name in G1_ACTUATOR_JOINT_NAMES}
     stiffness = {}
     damping = {}
     effort = {}
@@ -529,6 +564,38 @@ def _onnx_input_dim(input_info) -> int | None:
     return int(dim) if isinstance(dim, int) else None
 
 
+def _motion_fps(motion: np.lib.npyio.NpzFile) -> float | None:
+    if "fps" not in motion:
+        return None
+    fps = np.asarray(motion["fps"], dtype=np.float64).reshape(-1)
+    if fps.size == 0:
+        return None
+    return float(fps[0])
+
+
+def _print_timing_check(motion: np.lib.npyio.NpzFile, dt: float, decimation: int) -> None:
+    policy_dt = dt * decimation
+    policy_hz = 1.0 / policy_dt
+    fps = _motion_fps(motion)
+    if fps is None:
+        print(
+            f"[INFO]: Timing: physics_dt={dt:.6f}s, decimation={decimation}, "
+            f"policy_dt={policy_dt:.6f}s ({policy_hz:.2f} Hz), motion_fps=<missing>"
+        )
+        return
+
+    motion_dt = 1.0 / fps
+    print(
+        f"[INFO]: Timing: physics_dt={dt:.6f}s, decimation={decimation}, "
+        f"policy_dt={policy_dt:.6f}s ({policy_hz:.2f} Hz), motion_fps={fps:.2f}"
+    )
+    if not np.isclose(policy_dt, motion_dt, rtol=1e-4, atol=1e-6):
+        print(
+            f"[WARN]: Policy step ({policy_dt:.6f}s) does not match motion frame dt "
+            f"({motion_dt:.6f}s). Motion frame index advances once per policy step."
+        )
+
+
 def _build_policy_feed(
     input_infos,
     motion: np.lib.npyio.NpzFile,
@@ -679,6 +746,7 @@ def run_simulation(
     )
     if save_json:
         _save_motion_json(motion, motion_file)
+    _print_timing_check(motion, dt, decimation)
 
     onnx_model = onnx.load(policy_path)
     policy_joint_names, default_joint_pos, stiffness, damping, action_scale = _policy_metadata_or_config(

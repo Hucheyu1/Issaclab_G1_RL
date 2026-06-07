@@ -33,6 +33,21 @@ Eigen::Quaternionf anchor_quat_w(std::shared_ptr<State_Mimic::MotionLoader_> loa
     return torso_quat;
 }
 
+int motion_param_int(YAML::Node params, const std::string& name, int default_value)
+{
+    return params[name] ? params[name].as<int>() : default_value;
+}
+
+Eigen::VectorXf motor_to_policy_order(isaaclab::ManagerBasedRLEnv* env, const Eigen::VectorXf& data_dfs)
+{
+    auto & ids = env->robot->data.joint_ids_map;
+    Eigen::VectorXf data_bfs = Eigen::VectorXf::Zero(ids.size());
+    for(int i = 0; i < ids.size(); ++i) {
+        data_bfs(i) = data_dfs[static_cast<int>(ids[i])];
+    }
+    return data_bfs;
+}
+
 
 namespace isaaclab
 {
@@ -103,6 +118,49 @@ REGISTER_OBSERVATION(motion_anchor_ori_b)
     return std::vector<float>(data.data(), data.data() + data.size());
 }
 
+REGISTER_OBSERVATION(robot_command)
+{
+    auto & loader = State_Mimic::motion;
+    int interval = motion_param_int(params, "interval", 2);
+    int frames = motion_param_int(params, "frames", 10);
+
+    std::vector<float> data;
+    data.reserve(frames * env->robot->data.joint_ids_map.size());
+    for(int i = 0; i < frames; ++i) {
+        auto joint_pos = motor_to_policy_order(env, loader->joint_pos_at_offset(i * interval));
+        data.insert(data.end(), joint_pos.data(), joint_pos.data() + joint_pos.size());
+    }
+    return data;
+}
+
+REGISTER_OBSERVATION(human_command)
+{
+    auto & loader = State_Mimic::motion;
+    int interval = motion_param_int(params, "interval", 2);
+    int frames = motion_param_int(params, "frames", 10);
+
+    std::vector<float> data;
+    for(int i = 0; i < frames; ++i) {
+        auto feature = loader->extra_feature_at_offset(i * interval);
+        data.insert(data.end(), feature.data(), feature.data() + feature.size());
+    }
+    return data;
+}
+
+REGISTER_OBSERVATION(keypoints_command)
+{
+    auto & loader = State_Mimic::motion;
+    int interval = motion_param_int(params, "interval", 2);
+    int frames = motion_param_int(params, "frames", 10);
+
+    std::vector<float> data;
+    for(int i = 0; i < frames; ++i) {
+        auto feature = loader->extra_feature_at_offset(i * interval);
+        data.insert(data.end(), feature.data(), feature.data() + feature.size());
+    }
+    return data;
+}
+
 }
 }
 
@@ -150,10 +208,15 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
             FSMStringMap.right.at("Velocity")
         )
     );
+    float bad_orientation_limit = cfg["bad_orientation_limit"] ? cfg["bad_orientation_limit"].as<float>() : 1.0f;
+    std::string fall_recovery_state = cfg["fall_recovery_state"] ? cfg["fall_recovery_state"].as<std::string>() : "Passive";
+    if(!FSMStringMap.right.count(fall_recovery_state)) {
+        throw std::runtime_error("FSM: Unknown fall_recovery_state " + fall_recovery_state);
+    }
     this->registered_checks.emplace_back(
         std::make_pair(
-            [&]()->bool{ return isaaclab::mdp::bad_orientation(env.get(), 1.0); }, // bad orientation
-            FSMStringMap.right.at("Passive")
+            [this, bad_orientation_limit]()->bool{ return isaaclab::mdp::bad_orientation(env.get(), bad_orientation_limit); }, // bad orientation
+            FSMStringMap.right.at(fall_recovery_state)
         )
     );
 }

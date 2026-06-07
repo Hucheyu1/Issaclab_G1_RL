@@ -24,6 +24,18 @@ FSM:
     Mimic_Multi_G1_Flat:
       id: 103
       type: Mimic
+    Mimic_GAEMimic_Policy:
+      id: 111
+      type: Mimic
+    Mimic_GAEMimic_Robot:
+      id: 112
+      type: Mimic
+    Mimic_GAEMimic_Human:
+      id: 113
+      type: Mimic
+    Mimic_GAEMimic_Keypoints:
+      id: 114
+      type: Mimic
 
   Passive:
     transitions: 
@@ -105,3 +117,43 @@ FSM:
     motion_file: config/policy/mimic/multi_g1_flat/params/dance1_subject1_50hz.csv
     policy_dir: config/policy/mimic/multi_g1_flat/
     time_start: 0.0
+  Mimic_GAEMimic_Policy:
+    transitions:
+      Passive: LT + B.on_pressed
+      Velocity: RB + X.on_pressed
+    fps: 50
+    motion_file: config/policy/mimic/gaemimic_policy/params/dance1_subject1_50hz.csv
+    policy_dir: config/policy/mimic/gaemimic_policy/
+    time_start: 0.0
+    bad_orientation_limit: 1.0
+    fall_recovery_state: FixStand
+  Mimic_GAEMimic_Robot:
+    transitions:
+      Passive: LT + B.on_pressed
+      Velocity: RB + X.on_pressed
+    fps: 50
+    motion_file: config/policy/mimic/gaemimic_robot/params/dance1_subject1_50hz.csv
+    policy_dir: config/policy/mimic/gaemimic_robot/
+    time_start: 0.0
+    bad_orientation_limit: 1.0
+    fall_recovery_state: FixStand
+  Mimic_GAEMimic_Human:
+    transitions:
+      Passive: LT + B.on_pressed
+      Velocity: RB + X.on_pressed
+    fps: 50
+    motion_file: config/policy/mimic/gaemimic_human/params/dance1_subject1_50hz.csv
+    policy_dir: config/policy/mimic/gaemimic_human/
+    time_start: 0.0
+    bad_orientation_limit: 1.0
+    fall_recovery_state: FixStand
+  Mimic_GAEMimic_Keypoints:
+    transitions:
+      Passive: LT + B.on_pressed
+      Velocity: RB + X.on_pressed
+    fps: 50
+    motion_file: config/policy/mimic/gaemimic_keypoints/params/dance1_subject1_50hz.csv
+    policy_dir: config/policy/mimic/gaemimic_keypoints/
+    time_start: 0.0
+    bad_orientation_limit: 1.0
+    fall_recovery_state: FixStand
